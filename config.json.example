@@ -1,0 +1,28 @@
+{
+    "nightscout_url": "https://your-site.fly.dev",
+    "api_secret": "your_api_secret_here",
+    "refresh_interval_ms": 60000,
+    "timezone_offset_hours": 0,
+    "time_window_hours": 3,
+    "target_low": 70,
+    "target_high": 180,
+    "widget_width": 400,
+    "widget_height": 280,
+    "glucose_font_size": 18,
+    "time_font_size": 12,
+    "age_font_size": 10,
+    "data_point_size": 6,
+    "show_treatments": true,
+    "treatments_to_fetch": 50,
+    "gradient_interpolation": false,
+    "appearance": {
+        "graph_background_opacity": 100,
+        "label_pill_opacity": 67,
+        "marker_outline_width": 1.5,
+        "marker_outline_color": "#000000",
+        "graph_line_width": 2,
+        "target_zone_opacity": 20,
+        "grid_opacity": 0.3,
+        "background_color": "#1a1a1a"
+    }
+}
