@@ -89,6 +89,14 @@ All appearance settings can also be changed live via **right-click → Settings�
 ```
 nsoverlay/
 ├── nsoverlay.py              # Main application
+├── nsoverlay.spec            # PyInstaller spec (release build)
+├── nsoverlay_debug.spec      # PyInstaller spec (debug build)
+├── build.ps1                 # Automated build script (handles MS Store Python fix)
+├── create_shortcut.ps1       # Creates a desktop shortcut for taskbar pinning
+├── set_appid.ps1             # Sets AppUserModelID on existing shortcuts
+├── nsoverlay_launcher.vbs    # Silent VBS launcher (no console window)
+├── icon.ico                  # Application icon
+├── python311.dll             # MS Store Python DLL fix (used by build.ps1)
 ├── config.json.example       # Template — copy to config.json
 ├── config.json               # Your config (gitignored)
 ├── requirements.txt          # Python dependencies
@@ -99,12 +107,32 @@ nsoverlay/
 
 ## Building a standalone .exe (Windows)
 
+The easiest way is to use the included build script, which also handles the Microsoft Store Python DLL issue automatically:
+
+```powershell
+.\build.ps1
+```
+
+Or manually:
+
 ```bash
 pip install pyinstaller
 pyinstaller nsoverlay.spec
 ```
 
 The executable will be in `dist/nsoverlay/`.
+
+> **Microsoft Store Python note:** If you installed Python from the MS Store, copy `python311.dll` from the repo root into `dist/nsoverlay/_internal/` after building (the `build.ps1` script does this automatically).
+
+## Pinning to the taskbar
+
+If you pin the app to the taskbar by right-clicking the running window, Windows may pin `python.exe` instead of NSOverlay (wrong icon, won't reopen the app). To create a proper shortcut:
+
+1. Right-click `create_shortcut.ps1` → **Run with PowerShell**
+2. An `NSOverlay` shortcut will appear on your Desktop with the correct icon.
+3. Right-click that shortcut → **Pin to taskbar**
+
+The shortcut launches `pythonw.exe` (no console window) and carries the correct `AppUserModelID` so the taskbar button groups correctly while the app is running.
 
 ## Troubleshooting
 
