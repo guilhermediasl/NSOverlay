@@ -78,6 +78,8 @@ def load_config():
         "marker_outline_width": 1.5,
         "marker_outline_color": "#000000",
         "graph_line_width": 2,
+        "graph_line_style": "solid",
+        "show_y_label": True,
         "target_zone_opacity": 20,
         "grid_opacity": 0.3,
         "background_color": "#1a1a1a",
@@ -142,6 +144,7 @@ def load_config():
         'show_treatments': bool(config.get("show_treatments", True)),
         'treatments_to_fetch': max(1, min(500, int(config.get("treatments_to_fetch", 50)))),
         'gradient_interpolation': bool(config.get("gradient_interpolation", True)),
+        'header_pills': config.get('header_pills', []),
         'appearance': appearance
     }
 
@@ -311,17 +314,26 @@ class GlucoseWidget(QWidget):
         self.label.setFont(QFont("Segoe UI", self.config['glucose_font_size'], QFont.Weight.Bold))
         self.label.setStyleSheet("color: #ffffff;")
         
+        # Pills container – sits on the left edge of the header row
+        self.pills_layout = QHBoxLayout()
+        self.pills_layout.setContentsMargins(0, 0, 0, 0)
+        self.pills_layout.setSpacing(6)
+        self.header_pills_widget = QWidget()
+        self.header_pills_widget.setLayout(self.pills_layout)
+        self.header_pills_widget.setStyleSheet("background: transparent;")
+        self.header_pills_widget.hide()
+
+        self.header_layout.addWidget(self.header_pills_widget, 0)
         self.header_layout.addStretch(1)
         self.header_layout.addLayout(self.left_info_layout, 0)
         self.header_layout.addWidget(self.label, 0)
-        self.header_layout.addStretch(1)
         
         header_widget = QWidget()
         header_widget.setLayout(self.header_layout)
         header_widget.setFixedHeight(40)
         header_widget.setStyleSheet("background: transparent;")
         self.main_layout.addWidget(header_widget)
-        
+
         self.close_button = QLabel("✕", self)
         self.close_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.close_button.setFont(QFont("Arial", 16, QFont.Weight.Bold))
@@ -360,7 +372,10 @@ class GlucoseWidget(QWidget):
 
         self.load_position()
         self.load_zoom_state()
-        self.update_glucose()
+        # Defer the first fetch until after the widget is shown and the event loop
+        # has processed the first paint — this ensures the graph viewport is fully
+        # laid out so viewRange(), dot sizing and treatment positions are correct.
+        QTimer.singleShot(0, self.update_glucose)
 
         self.old_pos = None
         self.last_entry_time = None
@@ -447,6 +462,135 @@ class GlucoseWidget(QWidget):
         rgba = f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
         self.setStyleSheet(f"#GlucoseWidget {{ background-color: {rgba}; }}")
 
+    def _update_header_pills(self, treatments):
+        """Rebuild header pill labels based on the latest treatments and current config.
+
+        Each entry in config['header_pills'] may have:
+          event_type    (str, required)  – matches treatment eventType (case-insensitive)
+          label         (str)            – display label; defaults to event_type
+          show_field    (str)            – treatment field whose value is shown/summed
+          suffix        (str)            – text appended after the value (e.g. "U", "g")
+          color         (str)            – pill background color (default "#4a9eff")
+          max_age_hours (number)         – how old the treatment may be (default 24); ignored when sum_daily=true
+          sum_daily     (bool)           – when true, sum show_field across all matching treatments
+                                           on the current local day (uses timezone_offset)
+        """
+        pill_configs = self.config.get('header_pills', [])
+
+        # Clear all items from pills layout
+        while self.pills_layout.count():
+            item = self.pills_layout.takeAt(0)
+            w = item.widget() if item else None
+            if w:
+                w.deleteLater()
+
+        if not pill_configs:
+            self.header_pills_widget.hide()
+            return
+
+        pill_opacity_pct = self.config['appearance'].get('label_pill_opacity', 67)
+        pill_alpha = round(pill_opacity_pct / 100 * 255)
+        now_utc = datetime.utcnow()
+        local_today = (now_utc + timedelta(hours=self.timezone_offset)).date()
+
+        def _shadow():
+            fx = QGraphicsDropShadowEffect()
+            fx.setBlurRadius(6)
+            fx.setOffset(0, 0)
+            fx.setColor(QColor(0, 0, 0, 200))
+            return fx
+
+        def _parse_treatment_time(created_at):
+            try:
+                return datetime.strptime(created_at.split('.')[0] + 'Z', "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                try:
+                    return datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    return None
+
+        pills_added = 0
+
+        for pill_cfg in pill_configs:
+            event_type_cfg = pill_cfg.get('event_type', '')
+            if not event_type_cfg:
+                continue
+
+            label_text = pill_cfg.get('label', event_type_cfg)
+            show_field = pill_cfg.get('show_field')
+            suffix = pill_cfg.get('suffix', '')
+            sum_daily = bool(pill_cfg.get('sum_daily', False))
+            max_age_hours = float(pill_cfg.get('max_age_hours', 24))
+
+            value_str = ''
+
+            if sum_daily and show_field:
+                # Sum show_field for all matching treatments on the current local day
+                total = 0.0
+                found_any = False
+                for t in treatments:
+                    if t.get('eventType', '').lower() != event_type_cfg.lower():
+                        continue
+                    t_time = _parse_treatment_time(t.get('created_at', ''))
+                    if t_time is None:
+                        continue
+                    t_local_date = (t_time + timedelta(hours=self.timezone_offset)).date()
+                    if t_local_date != local_today:
+                        continue
+                    raw_val = t.get(show_field)
+                    try:
+                        total += float(raw_val)
+                        found_any = True
+                    except (TypeError, ValueError):
+                        pass
+                if not found_any:
+                    continue
+                display_val = int(total) if total == int(total) else round(total, 1)
+                value_str = f": {display_val}{suffix}"
+            else:
+                # Find most recent matching treatment within max_age_hours
+                best_treatment = None
+                best_time = None
+                for t in treatments:
+                    if t.get('eventType', '').lower() != event_type_cfg.lower():
+                        continue
+                    t_time = _parse_treatment_time(t.get('created_at', ''))
+                    if t_time is None:
+                        continue
+                    age_hours = (now_utc - t_time).total_seconds() / 3600
+                    if age_hours > max_age_hours:
+                        continue
+                    if best_time is None or t_time > best_time:
+                        best_time = t_time
+                        best_treatment = t
+                if best_treatment is None:
+                    continue
+                if show_field:
+                    val = best_treatment.get(show_field)
+                    if val is not None:
+                        value_str = f": {val}{suffix}"
+
+            pill_text = f"{label_text}{value_str}"
+
+            pill_label = QLabel(pill_text)
+            pill_label.setFont(QFont("Segoe UI", self.config['age_font_size'] - 1, QFont.Weight.Normal))
+            pill_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            pill = f"rgba(0, 0, 0, {pill_alpha})"
+            pill_label.setStyleSheet(
+                f"color: #80e8e0; background-color: {pill}; "
+                f"border-radius: 4px; padding: 1px 8px; margin: 0px;"
+            )
+            pill_label.setGraphicsEffect(_shadow())
+
+            self.pills_layout.addWidget(pill_label)
+            pills_added += 1
+
+        if pills_added > 0:
+            self.header_pills_widget.show()
+        else:
+            self.header_pills_widget.hide()
+
     def _apply_header_label_styles(self, glucose_text_color=None):
         """Style header labels with a dark pill background + drop-shadow for readability
         at any transparency level."""
@@ -513,6 +657,13 @@ class GlucoseWidget(QWidget):
         axis_text_color = self.config['appearance']['colors']['graph']['axis_text']
         
         self.graph.showGrid(x=True, y=True, alpha=self.config['appearance']['grid_opacity'])
+        # Push the grid behind all data items
+        plot_item = self.graph.getPlotItem()
+        if plot_item is not None:
+            for item in plot_item.items:
+                if type(item).__name__ == 'GridItem':
+                    item.setZValue(-10)
+                    break
         self.graph.getAxis('left').setPen(pg.mkPen(color=axis_color, width=1))
         self.graph.getAxis('bottom').setPen(pg.mkPen(color=axis_color, width=1))
         self.graph.getAxis('left').setTextPen(pg.mkPen(color=axis_text_color))
@@ -520,7 +671,10 @@ class GlucoseWidget(QWidget):
         
         self.graph.setYRange(40, 300, padding=0.1)  # type: ignore[call-arg]
         label_color = self.config['appearance']['colors']['graph']['axis_labels']
-        self.graph.setLabel('left', 'Glucose', color=label_color, size='10pt')
+        if self.config['appearance'].get('show_y_label', True):
+            self.graph.setLabel('left', 'Glucose', color=label_color, size='10pt')
+        else:
+            self.graph.setLabel('left', '')
         # Remove bottom label to avoid scientific notation display
         self.graph.setLabel('bottom', '', color=label_color, size='10pt')
         
@@ -1097,32 +1251,21 @@ class GlucoseWidget(QWidget):
             self.graph.removeItem(item)
         self.treatment_items = []
     
-    def fetch_treatments(self):
-        """Fetch treatment data from Nightscout"""
-        if not self.config.get('show_treatments', True):
-            return []
-            
+    def fetch_all_treatments(self):
+        """Fetch all treatment data from Nightscout (unfiltered)."""
         try:
             headers = {"api-secret": self.api_secret}
             treatments_to_fetch = self.config.get('treatments_to_fetch', 50)
-            
+
             response = requests.get(
                 f"{self.nightscout_url}/api/v1/treatments.json?count={treatments_to_fetch}",
                 headers=headers,
                 timeout=5
             )
-            
+
             response.raise_for_status()
-            treatments = response.json()
-            
-            filtered_treatments = []
-            for treatment in treatments:
-                event_type = treatment.get('eventType', '').lower()
-                if event_type in ['correction bolus', 'meal bolus', 'bolus', 'carb correction', 'carbs', 'exercise']:
-                    filtered_treatments.append(treatment)
-            
-            return filtered_treatments
-            
+            return response.json()
+
         except Exception as e:
             print(f"Error fetching treatments: {e}")
             return []
@@ -1131,7 +1274,12 @@ class GlucoseWidget(QWidget):
         """Add treatment markers to the graph"""
         if not treatments or not self.config.get('show_treatments', True):
             return
-        
+
+        graph_event_types = {'correction bolus', 'meal bolus', 'bolus', 'carb correction', 'carbs', 'exercise', 'basal injection'}
+        treatments = [t for t in treatments if t.get('eventType', '').lower() in graph_event_types]
+        if not treatments:
+            return
+
         view_range = self.graph.getViewBox().viewRange()
         y_min, y_max = view_range[1]
         treatment_y_position = y_min + (y_max - y_min) * 0.08
@@ -1159,7 +1307,26 @@ class GlucoseWidget(QWidget):
                 event_type = treatment.get('eventType', '').lower()
                 insulin_amount = treatment.get('insulin', 0)
                 carb_amount = treatment.get('carbs', 0)
-                
+
+                if event_type == 'basal injection':
+                    basal_amount = treatment.get('notes', treatment.get('insulin', ''))
+                    try:
+                        basal_amount = float(basal_amount)
+                    except (TypeError, ValueError):
+                        basal_amount = None
+                    label_str = f"▼{basal_amount}U" if basal_amount is not None else "▼Basal"
+                    basal_color = '#80e8e0'
+
+                    outline_item = pg.TextItem(label_str, color='black', anchor=(0.5, 1.0))
+                    outline_item.setPos(unix_timestamp + 1, treatment_y_position - 1)
+                    self.graph.addItem(outline_item)
+                    self.treatment_items.append(outline_item)
+
+                    text_item = pg.TextItem(label_str, color=basal_color, anchor=(0.5, 1.0))
+                    text_item.setPos(unix_timestamp, treatment_y_position)
+                    self.graph.addItem(text_item)
+                    self.treatment_items.append(text_item)
+
                 if insulin_amount and insulin_amount > 0:
                     style = treatment_styles['insulin']
                     text_content = f"{style['symbol']}{insulin_amount}U"
@@ -1391,15 +1558,23 @@ class GlucoseWidget(QWidget):
                     sgv_max=sgv_max, sgv_min=sgv_min
                 )
                 
+                _line_style_map = {
+                    'solid': Qt.PenStyle.SolidLine,
+                    'dash': Qt.PenStyle.DashLine,
+                    'dot': Qt.PenStyle.DotLine,
+                    'dashdot': Qt.PenStyle.DashDotLine,
+                }
+                _style_key = self.config['appearance'].get('graph_line_style', 'solid')
+                _pen_style = _line_style_map.get(_style_key, Qt.PenStyle.SolidLine)
                 self.graph.plot(
                     [x1, x2], [y1, y2],
-                    pen=pg.mkPen(color=segment_color, width=self.config['appearance']['graph_line_width']),
+                    pen=pg.mkPen(color=segment_color, width=self.config['appearance']['graph_line_width'], style=_pen_style),
                     antialias=True
                 )
             
             dot_size = self.get_adaptive_dot_size()
             for i, (x, y, color) in enumerate(zip(timestamps, glucose_values, colors)):
-                self.graph.plot([x], [y],
+                dot = self.graph.plot([x], [y],
                     pen=pg.mkPen(self.config['appearance']['marker_outline_color'], 
                                 width=self.config['appearance']['marker_outline_width']),
                     symbol='o', 
@@ -1408,6 +1583,7 @@ class GlucoseWidget(QWidget):
                     symbolPen=pg.mkPen(self.config['appearance']['marker_outline_color'], 
                                       width=self.config['appearance']['marker_outline_width'])
                 )
+                dot.setZValue(100)
             
             if timestamps and glucose_values:
                 newest_x = timestamps[-1]
@@ -1528,25 +1704,18 @@ class GlucoseWidget(QWidget):
             self.update_color(current)
 
             if glucose_values:
-                min_glucose = min(glucose_values)
-                max_glucose = max(glucose_values)
-                
-                glucose_range = max_glucose - min_glucose
-                padding = max(glucose_range * 0.15, 20)
-                
-                y_min = max(40, min_glucose - padding)
-                y_max = min(400, max_glucose + padding)
-                
-                if y_max - y_min < 100:
-                    center = (y_min + y_max) / 2
-                    y_min = center - 50
-                    y_max = center + 50
-                
+                y_min, y_max = self._compute_y_range(glucose_values)
                 self.graph.setYRange(y_min, y_max, padding=0)  # type: ignore[call-arg]
 
+            # Fetch all treatments once — used for both graph markers and header pills
+            all_treatments = []
+            if self.config.get('show_treatments', True) or self.config.get('header_pills', []):
+                all_treatments = self.fetch_all_treatments()
+
             if self.config.get('show_treatments', True):
-                treatments = self.fetch_treatments()
-                self.add_treatments_to_graph(treatments)
+                self.add_treatments_to_graph(all_treatments)
+
+            self._update_header_pills(all_treatments)
 
             now = datetime.now().timestamp()
             time_window_seconds = self.config['time_window_hours'] * 60 * 60
@@ -1655,15 +1824,46 @@ class GlucoseWidget(QWidget):
                     age_color = "#dddd00"  # Warning - yellow
                 else:
                     age_color = "#dd0000"  # Stale - red
-                self.age_label.setStyleSheet(f"color: {age_color}; background: transparent; border: none;")
+                pill_opacity_pct = self.config['appearance'].get('label_pill_opacity', 67)
+                pill_alpha = round(pill_opacity_pct / 100 * 255)
+                pill = f"rgba(0, 0, 0, {pill_alpha})"
+                self.age_label.setStyleSheet(
+                    f"color: {age_color}; background-color: {pill}; "
+                    f"border-radius: 4px; padding: 1px 6px; margin: 0px;"
+                )
         except:
             pass  # Silent fail for time updates
     
+    def _compute_y_range(self, glucose_values):
+        """Compute Y axis range that always shows target lines and the current reading."""
+        target_low = self.config['target_low']
+        target_high = self.config['target_high']
+
+        # Anchor points that must always be visible
+        anchors = [target_low, target_high]
+        if glucose_values:
+            anchors.append(glucose_values[-1])   # current reading
+            anchors.extend(glucose_values)        # full dataset
+
+        data_min = min(anchors)
+        data_max = max(anchors)
+
+        glucose_range = data_max - data_min
+        padding = max(glucose_range * 0.15, 20)
+
+        y_min = max(40, data_min - padding)
+        y_max = min(400, data_max + padding)
+
+        if y_max - y_min < 100:
+            center = (y_min + y_max) / 2
+            y_min = center - 50
+            y_max = center + 50
+
+        return y_min, y_max
+
     def calculate_adaptive_y_range(self):
         """Calculate appropriate Y range based on current glucose data"""
         try:
-            view_range = self.graph.getViewBox().viewRange()
-            current_x_min, current_x_max = view_range[0]
             
             headers = {"api-secret": self.api_secret}
             response = requests.get(
@@ -1675,23 +1875,9 @@ class GlucoseWidget(QWidget):
             if response.status_code == 200:
                 entries = response.json()
                 if entries:
-                    glucose_values = [entry["sgv"] for entry in entries]
-                    
-                    min_glucose = min(glucose_values)
-                    max_glucose = max(glucose_values)
-                    
-                    glucose_range = max_glucose - min_glucose
-                    padding = max(glucose_range * 0.15, 20)
-                    
-                    y_min = max(40, min_glucose - padding)
-                    y_max = min(400, max_glucose + padding)
-                    
-                    if y_max - y_min < 100:
-                        center = (y_min + y_max) / 2
-                        y_min = center - 50
-                        y_max = center + 50
-                    
-                    return y_min, y_max
+                    glucose_values = [entry["sgv"] for entry in entries if isinstance(entry.get("sgv"), (int, float))]
+                    if glucose_values:
+                        return self._compute_y_range(glucose_values)
         except:
             pass
         
@@ -1774,13 +1960,10 @@ class GlucoseWidget(QWidget):
         glucose_color = self.get_glucose_color_with_interpolation(sgv, target_low, target_high, glucose_colors)
         
         if sgv < target_low:
-            border_color = glucose_color
             text_color = "#ff6666"
         elif target_low <= sgv <= target_high:
-            border_color = glucose_color
             text_color = glucose_color
         else:
-            border_color = glucose_color
             text_color = "#ffaa44"
 
         self._apply_widget_background()
