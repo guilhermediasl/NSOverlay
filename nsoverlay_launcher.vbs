@@ -1,0 +1,2 @@
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "C:\Users\guilh\OneDrive\Documentos\GitHub\nightscoutwindow\.venv\Scripts\pythonw.exe" & Chr(34) & " " & Chr(34) & "C:\Users\guilh\OneDrive\Documentos\GitHub\nightscoutwindow\nsoverlay.py" & Chr(34), 0, False
