@@ -54,12 +54,67 @@ cp config.json.example config.json
 | `refresh_interval_ms` | How often to pull new data (ms) | `60000` |
 | `timezone_offset_hours` | Local UTC offset | `0` |
 | `time_window_hours` | Hours of history shown in graph | `3` |
+| `entries_to_fetch` | Number of glucose entries to request from the API | `90` |
 | `target_low` / `target_high` | Your glucose target range (mg/dL) | `70` / `180` |
 | `widget_width` / `widget_height` | Initial window size in pixels | `400` / `280` |
+| `glucose_font_size` | Font size for the main glucose reading | `18` |
+| `time_font_size` | Font size for the time label | `12` |
+| `age_font_size` | Font size for the data-age label | `10` |
+| `show_delta` | Show glucose delta vs 5 min ago | `true` |
+| `data_point_size` | Dot size for glucose data points | `6` |
+| `show_treatments` | Plot bolus / carb / exercise markers on the graph | `true` |
+| `treatments_to_fetch` | Number of treatments to request from the API | `50` |
+| `gradient_interpolation` | Colour-gradient from yellow→red as glucose moves away from range | `false` |
 | `appearance.graph_background_opacity` | Graph background opacity 0–100 | `100` |
 | `appearance.label_pill_opacity` | Header label pill opacity 0–100 | `67` |
+| `appearance.graph_line_width` | Width of the glucose line in pixels | `2` |
+| `appearance.graph_line_style` | Line style: `solid`, `dash`, `dot`, `dashdot` | `"solid"` |
+| `appearance.show_y_label` | Show or hide the "Glucose" label on the Y axis | `true` |
+| `appearance.marker_outline_width` | Width of the dot outline | `1.5` |
+| `appearance.marker_outline_color` | Colour of the dot outline | `"#000000"` |
+| `appearance.target_zone_opacity` | Opacity (0–255) of the low/high background zones | `20` |
+| `appearance.grid_opacity` | Opacity (0–1) of the graph grid lines | `0.3` |
+| `appearance.background_color` | Graph background colour | `"#1a1a1a"` |
 
 All appearance settings can also be changed live via **right-click → Settings…**
+
+### Header pills
+
+Pills are small labels shown in the top-left corner of the widget, each summarising a Nightscout treatment type. Configured via the `header_pills` array:
+
+```json
+"header_pills": [
+    {
+        "event_type": "Basal Injection",
+        "label": "Basal",
+        "show_field": "notes",
+        "suffix": "U",
+        "sum_daily": true
+    }
+]
+```
+
+| Field | Description | Default |
+|---|---|---|
+| `event_type` | Nightscout `eventType` to match (case-insensitive) | **required** |
+| `label` | Text shown inside the pill | value of `event_type` |
+| `show_field` | Treatment field to display (e.g. `notes`, `insulin`, `carbs`) | none |
+| `suffix` | Text appended after the value (e.g. `U`, `g`) | `""` |
+| `sum_daily` | When `true`, sums `show_field` across **all** matching treatments on the current local day | `false` |
+| `max_age_hours` | *(used when `sum_daily` is `false`)* Only show if most-recent match is within N hours | `24` |
+
+Pills use a pastel cyan font (`#80e8e0`) with the same dark semi-transparent pill background as the time/age labels. A pill is hidden automatically if there is no matching treatment found for the current day (or within `max_age_hours`). Multiple pills can be defined in the array.
+
+### Treatment markers on the graph
+
+When `show_treatments` is `true`, the following `eventType` values are plotted directly on the graph in addition to appearing as header pills if configured:
+
+| Event type | Marker |
+|---|---|
+| Correction Bolus / Meal Bolus / Bolus | `▼<amount>U` in blue |
+| Carb Correction / Carbs | `▲<amount>g` in orange |
+| Exercise | coloured horizontal band with label |
+| **Basal Injection** | `▼<amount>U` in pastel cyan |
 
 ![Settings dialog](docs/images/settings_dialog.png)
 
