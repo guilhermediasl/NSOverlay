@@ -77,6 +77,8 @@ Thumbs.db
 # Application-specific files
 widget_position.json
 zoom_state.json
+nsoverlay.log
+nsoverlay.log.*
 
 # Personal configuration (contains API secrets)
 config.json
