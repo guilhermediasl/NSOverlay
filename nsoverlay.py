@@ -1173,7 +1173,15 @@ class GlucoseWidget(QWidget):
         target_high = self.config['target_high']
         glucose_colors = self.config['appearance']['colors']['glucose_ranges']
 
-        if glucose < target_low:
+        # Check data staleness — mirror the age-label thresholds (>15 min = stale)
+        is_stale = False
+        if hasattr(self, 'last_entry_time') and self.last_entry_time:
+            age_seconds = int((datetime.utcnow() - self.last_entry_time).total_seconds())
+            is_stale = age_seconds > 900  # 15 minutes
+
+        if is_stale:
+            bg_hex = "#666666"  # Grey — stale data
+        elif glucose < target_low:
             bg_hex = glucose_colors['low']
         elif glucose <= target_high:
             bg_hex = glucose_colors['in_range']
@@ -1182,12 +1190,19 @@ class GlucoseWidget(QWidget):
 
         self._tray.setIcon(self._make_tray_icon(glucose, bg_hex))
 
+        # Cache so update_time_display can re-render on stale transition
+        self._last_tray_glucose = glucose
+        self._last_tray_trend = trend_arrow
+        self._last_tray_delta = delta_text
+        self._tray_was_stale = is_stale
+
         age_text = self.age_label.text()
         tooltip = f"{glucose} {trend_arrow}"
         if delta_text:
             tooltip += f" {delta_text.strip()}"
         if age_text:
-            tooltip += f"\n{age_text}"
+            stale_prefix = "⚠ STALE — " if is_stale else ""
+            tooltip += f"\n{stale_prefix}{age_text}"
         self._tray.setToolTip(f"NSOverlay\n{tooltip}")
 
     def _toggle_visibility(self):
@@ -2220,6 +2235,16 @@ class GlucoseWidget(QWidget):
                     f"color: {age_color}; background-color: {pill}; "
                     f"border-radius: 4px; padding: 1px 6px; margin: 0px;"
                 )
+
+                # Refresh tray icon when staleness state changes (fresh→stale)
+                now_stale = age_seconds > 900
+                was_stale = getattr(self, '_tray_was_stale', None)
+                if now_stale != was_stale and hasattr(self, '_last_tray_glucose'):
+                    self._update_tray_icon(
+                        self._last_tray_glucose,
+                        self._last_tray_trend,
+                        self._last_tray_delta,
+                    )
         except:
             pass  # Silent fail for time updates
     

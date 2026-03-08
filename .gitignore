@@ -85,3 +85,6 @@ config.json
 
 # Screenshot capture helper (developer utility, not part of the app)
 capture_screenshots.py
+
+# GitHub Copilot / editor instructions (personal, not shared with repo)
+.github/
