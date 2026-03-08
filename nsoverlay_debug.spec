@@ -5,7 +5,7 @@ a = Analysis(
     ['nsoverlay.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('styles', 'styles'), ('icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

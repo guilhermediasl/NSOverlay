@@ -1,0 +1,23 @@
+QMenu {
+    background-color: #1c1c2a;
+    color: #d0d0e8;
+    border: 1px solid #303050;
+    border-radius: 8px;
+    padding: 5px 2px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11px;
+}
+QMenu::item {
+    padding: 7px 22px 7px 14px;
+    border-radius: 4px;
+    margin: 1px 4px;
+}
+QMenu::item:selected {
+    background-color: #00d4aa;
+    color: #000000;
+}
+QMenu::separator {
+    height: 1px;
+    background: #303050;
+    margin: 4px 8px;
+}
