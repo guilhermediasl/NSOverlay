@@ -10,8 +10,15 @@ A lightweight always-on-top desktop widget for Windows that displays real-time g
 - Draggable, resizable, remembers position and zoom state
 - Settings dialog for live customization (dot size, line width, opacity, font sizes, target range)
 - Right-click context menu with all options
+- **System tray icon** — colour-coded icon shows the current glucose value at a glance; right-click for a quick menu, double-click to toggle the widget
 
 ![NSOverlay widget on the desktop](docs/images/widget_main.png)
+
+<p align="center">
+  <img src="docs/images/tray_icon.png" width="80" alt="Tray icon (in-range)" />
+  &nbsp;&nbsp;
+  <img src="docs/images/tray_taskbar.png" alt="System tray area" />
+</p>
 
 ## Quick Start
 
@@ -36,6 +43,8 @@ On **first run**, a setup wizard will appear asking for your Nightscout URL and 
 ![Setup wizard dialog](docs/images/setup_wizard.png)
 
 To change the connection later: **right-click → Edit Connection…**
+
+![Widget right-click context menu](docs/images/context_menu.png)
 
 ## Configuration
 
@@ -116,7 +125,14 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 | Exercise | coloured horizontal band with label |
 | **Basal Injection** | `▼<amount>U` in pastel cyan |
 
-![Settings dialog](docs/images/settings_dialog.png)
+<p align="center">
+  <img src="docs/images/settings_dialog.png" width="48%" alt="Settings – Graph tab" />
+  &nbsp;
+  <img src="docs/images/settings_appearance.png" width="48%" alt="Settings – Appearance tab" />
+</p>
+<p align="center">
+  <img src="docs/images/settings_colors.png" width="48%" alt="Settings – Colors tab" />
+</p>
 
 ## Usage
 
@@ -124,12 +140,16 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 |---|---|
 | Move widget | Drag anywhere |
 | Resize | Drag any edge or corner |
-| Close | Hover top-right → click ✕ |
-| Settings | Right-click → Settings… |
+| Minimize to tray | Hover top-right → click ✕, or right-click → Minimize to Tray |
+| Show/hide widget | Double-click tray icon, or tray right-click → Show/Hide NSOverlay |
+| Settings | Right-click widget or tray icon → Settings… |
 | Change Nightscout URL/secret | Right-click → Edit Connection… |
 | Reset graph view | Double-click the graph |
 | Zoom graph | Mouse wheel on graph |
 | Pan graph | Click-drag on graph |
+| Quit fully | Tray icon right-click → Quit, or right-click widget → Quit |
+
+![Tray context menu](docs/images/tray_menu.png)
 
 ## Keyboard shortcuts
 
@@ -137,7 +157,7 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 |---|---|
 | `Ctrl+G` | Toggle gradient interpolation |
 | `Ctrl+R` | Reload config from file |
-| `Escape` / `Q` | Close |
+| `Escape` / `Q` | Minimize to tray |
 
 ## File structure
 
@@ -196,6 +216,10 @@ The shortcut launches `pythonw.exe` (no console window) and carries the correct 
 **Wrong position on startup** — Delete `widget_position.json`.
 
 **Graph zoom stuck** — Delete `zoom_state.json`.
+
+**App won't quit with the ✕ button** — By design, ✕ minimizes to the system tray. To fully exit, right-click the tray icon → **Quit**.
+
+**Tray icon not visible** — Make sure your taskbar notification area isn't hiding the icon. Click the "^" arrow in the system tray to find it, then drag it to the visible area.
 
 **Run in debug mode** — Use `nsoverlay_debug.spec` with PyInstaller or just run from the terminal to see console output.
 

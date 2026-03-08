@@ -7,9 +7,10 @@ from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QMenu,
                              QSlider, QSpinBox, QDoubleSpinBox, QPushButton, QDialog, QFormLayout,
                              QGroupBox, QLineEdit, QTabWidget, QCheckBox, QComboBox, QListWidget,
-                             QScrollArea, QColorDialog, QFrame, QGraphicsDropShadowEffect)
+                             QScrollArea, QColorDialog, QFrame, QGraphicsDropShadowEffect,
+                             QSystemTrayIcon)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QAction, QFontMetrics
+from PyQt6.QtGui import QFont, QColor, QAction, QFontMetrics, QPixmap, QPainter, QIcon
 import pyqtgraph as pg
 
 # Resolve paths relative to the executable/script location so the app works
@@ -23,248 +24,20 @@ CONFIG_FILE = os.path.join(_BASE_DIR, "config.json")
 POSITION_FILE = os.path.join(_BASE_DIR, "widget_position.json")
 ZOOM_FILE = os.path.join(_BASE_DIR, "zoom_state.json")
 
-# ── Dark UI stylesheet ─────────────────────────────────────────────────────────
-DARK_QSS = """\
-QDialog, QWidget {
-    background-color: #181820;
-    color: #d0d0e8;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 11px;
-}
-QTabWidget::pane {
-    border: 1px solid #2c2c44;
-    border-radius: 6px;
-    background-color: #1c1c28;
-}
-QTabBar::tab {
-    background-color: #141420;
-    color: #6666aa;
-    padding: 8px 18px;
-    border: 1px solid #272740;
-    border-bottom: none;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    margin-right: 2px;
-    min-width: 60px;
-}
-QTabBar::tab:selected {
-    background-color: #1c1c28;
-    color: #00d4aa;
-    border-bottom: 1px solid #1c1c28;
-}
-QTabBar::tab:hover:!selected {
-    background-color: #1e1e30;
-    color: #aaaacc;
-}
-QLabel {
-    color: #c8c8dc;
-    background: transparent;
-    font-size: 11px;
-}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-    background-color: #20203a;
-    color: #e0e0f0;
-    border: 1px solid #38385a;
-    border-radius: 5px;
-    padding: 5px 8px;
-    min-height: 26px;
-    selection-background-color: #00d4aa;
-    selection-color: #000000;
-}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border-color: #00d4aa;
-    background-color: #232340;
-}
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
-    border-color: #5555a0;
-}
-QSpinBox::up-button, QDoubleSpinBox::up-button {
-    background: #2a2a48;
-    border: none;
-    border-left: 1px solid #38385a;
-    border-bottom: 1px solid #38385a;
-    width: 16px;
-    border-top-right-radius: 4px;
-}
-QSpinBox::down-button, QDoubleSpinBox::down-button {
-    background: #2a2a48;
-    border: none;
-    border-left: 1px solid #38385a;
-    width: 16px;
-    border-bottom-right-radius: 4px;
-}
-QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-    background: #444466;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 22px;
-    background: #2a2a48;
-    border-top-right-radius: 5px;
-    border-bottom-right-radius: 5px;
-    border-left: 1px solid #38385a;
-}
-QComboBox QAbstractItemView {
-    background-color: #20203a;
-    border: 1px solid #38385a;
-    color: #e0e0f0;
-    selection-background-color: #00d4aa;
-    selection-color: #000000;
-    outline: none;
-    padding: 2px;
-}
-QCheckBox {
-    color: #c8c8dc;
-    spacing: 8px;
-    background: transparent;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid #38385a;
-    background: #20203a;
-}
-QCheckBox::indicator:checked {
-    background: #00d4aa;
-    border-color: #00d4aa;
-}
-QCheckBox::indicator:hover {
-    border-color: #00d4aa;
-}
-QSlider::groove:horizontal {
-    height: 4px;
-    background: #2a2a48;
-    border-radius: 2px;
-    margin: 0;
-}
-QSlider::handle:horizontal {
-    background: #00d4aa;
-    border: 2px solid #1c1c28;
-    width: 14px;
-    height: 14px;
-    margin: -6px 0;
-    border-radius: 7px;
-}
-QSlider::handle:horizontal:hover {
-    background: #00ffcc;
-}
-QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #007a60, stop:1 #00d4aa);
-    border-radius: 2px;
-}
-QPushButton {
-    background-color: #232342;
-    color: #b8b8d8;
-    border: 1px solid #38386a;
-    border-radius: 5px;
-    padding: 6px 16px;
-    font-size: 11px;
-    font-weight: 500;
-}
-QPushButton:hover {
-    background-color: #2c2c54;
-    border-color: #5555a0;
-    color: #e0e0ff;
-}
-QPushButton:pressed {
-    background-color: #1e1e38;
-    border-color: #00d4aa;
-}
-QPushButton:default {
-    border-color: #00d4aa;
-    color: #00d4aa;
-    font-weight: 600;
-}
-QPushButton:default:hover {
-    background-color: #00332a;
-    color: #00ffcc;
-}
-QListWidget {
-    background-color: #1c1c28;
-    border: 1px solid #2c2c44;
-    border-radius: 6px;
-    color: #c8c8dc;
-    alternate-background-color: #202030;
-    outline: none;
-    padding: 2px;
-}
-QListWidget::item {
-    padding: 6px 10px;
-    border-radius: 4px;
-    margin: 1px 2px;
-}
-QListWidget::item:selected {
-    background-color: #00d4aa;
-    color: #000000;
-}
-QListWidget::item:hover:!selected {
-    background-color: #25253e;
-}
-QScrollBar:vertical {
-    background: #14141e;
-    width: 8px;
-    margin: 0;
-}
-QScrollBar::handle:vertical {
-    background: #38385a;
-    border-radius: 4px;
-    min-height: 24px;
-}
-QScrollBar::handle:vertical:hover { background: #00d4aa; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: none; background: none; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-QScrollBar:horizontal {
-    background: #14141e;
-    height: 8px;
-    margin: 0;
-}
-QScrollBar::handle:horizontal {
-    background: #38385a;
-    border-radius: 4px;
-    min-width: 24px;
-}
-QScrollBar::handle:horizontal:hover { background: #00d4aa; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; border: none; background: none; }
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
-QFrame[frameShape="4"] {
-    border: none;
-    border-top: 1px solid #2c2c44;
-    background: transparent;
-    max-height: 1px;
-}
-QScrollArea {
-    border: none;
-    background: transparent;
-}
-"""
+# ── Stylesheet loader ─────────────────────────────────────────────────────────
+def _load_qss(filename: str) -> str:
+    path = os.path.join(_BASE_DIR, "styles", filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        print(f"Warning: stylesheet not found: {path}")
+        return ""
 
-CONTEXT_MENU_QSS = """\
-QMenu {
-    background-color: #1c1c2a;
-    color: #d0d0e8;
-    border: 1px solid #303050;
-    border-radius: 8px;
-    padding: 5px 2px;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 11px;
-}
-QMenu::item {
-    padding: 7px 22px 7px 14px;
-    border-radius: 4px;
-    margin: 1px 4px;
-}
-QMenu::item:selected {
-    background-color: #00d4aa;
-    color: #000000;
-}
-QMenu::separator {
-    height: 1px;
-    background: #303050;
-    margin: 4px 8px;
-}
-"""
+
+DARK_QSS         = _load_qss("dark.qss")
+CONTEXT_MENU_QSS = _load_qss("context_menu.qss")
+
 
 
 class TimeAxisItem(pg.AxisItem):
@@ -316,7 +89,6 @@ def load_config():
     # Hash secret (Nightscout requires SHA1)
     hashed_secret = hashlib.sha1(secret.encode()).hexdigest()
     
-    # Deep-merge appearance so partial configs still work
     _default_appearance = {
         "marker_outline_width": 1.5,
         "marker_outline_color": "#000000",
@@ -651,6 +423,8 @@ class GlucoseWidget(QWidget):
             app.screenRemoved.connect(self.validate_position_on_screen_change)
             for screen in app.screens():
                 screen.geometryChanged.connect(self.validate_position_on_screen_change)
+
+        self._setup_tray()
         
     def resizeEvent(self, event):
         """Position the close button in top-right corner when widget is resized"""
@@ -1063,9 +837,13 @@ class GlucoseWidget(QWidget):
         
         menu.addSeparator()
         
-        close_action = QAction("Close", self)
+        close_action = QAction("Minimize to Tray", self)
         close_action.triggered.connect(self.close)
         menu.addAction(close_action)
+
+        quit_action_ctx = QAction("Quit", self)
+        quit_action_ctx.triggered.connect(self._quit_app)
+        menu.addAction(quit_action_ctx)
         
         menu.exec(position)
     
@@ -1265,7 +1043,136 @@ class GlucoseWidget(QWidget):
     def closeEvent(self, event):
         self.save_position_and_size()
         self.save_zoom_state()
-        event.accept()
+        if hasattr(self, '_tray') and self._tray.isVisible():
+            self.hide()
+            if hasattr(self, '_show_hide_action'):
+                self._show_hide_action.setText("Show NSOverlay")
+            event.ignore()
+        else:
+            event.accept()
+
+    # ===== System Tray =====
+
+    def _setup_tray(self):
+        """Create and configure the system tray icon."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self._tray = QSystemTrayIcon(self)
+
+        # Use the app icon as initial tray icon, it will be replaced after first glucose fetch
+        _icon_path = os.path.join(_BASE_DIR, "icon.ico")
+        if os.path.exists(_icon_path):
+            self._tray.setIcon(QIcon(_icon_path))
+        else:
+            # Fallback: draw a plain placeholder
+            self._tray.setIcon(self._make_tray_icon("--", "#444444"))
+
+        self._tray.setToolTip("NSOverlay — loading...")
+
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet(CONTEXT_MENU_QSS)
+
+        self._show_hide_action = QAction("Hide NSOverlay", self)
+        self._show_hide_action.triggered.connect(self._toggle_visibility)
+        tray_menu.addAction(self._show_hide_action)
+
+        tray_menu.addSeparator()
+
+        settings_action = QAction("Settings...", self)
+        settings_action.triggered.connect(self.show_settings_dialog)
+        tray_menu.addAction(settings_action)
+
+        tray_menu.addSeparator()
+
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self._quit_app)
+        tray_menu.addAction(quit_action)
+
+        self._tray.setContextMenu(tray_menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _make_tray_icon(self, glucose, bg_hex):
+        """Render a 64x64 QIcon with the glucose value on a colour-coded background."""
+        size = 64
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Coloured rounded-rectangle background
+        bg = QColor(bg_hex)
+        bg.setAlpha(230)
+        painter.setBrush(bg)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(2, 2, size - 4, size - 4, 10, 10)
+
+        # Glucose text — pick dark or light colour based on background luminance
+        text = str(glucose)
+        font_size = 32 if len(text) <= 2 else 26
+        font = QFont("Arial", font_size, QFont.Weight.Bold)
+        painter.setFont(font)
+        luma = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
+        text_color = QColor("#000000") if luma > 128 else QColor("#ffffff")
+        painter.setPen(text_color)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, text)
+
+        painter.end()
+        return QIcon(pixmap)
+
+    def _update_tray_icon(self, glucose, trend_arrow, delta_text):
+        """Update tray icon colour and tooltip to reflect the latest glucose reading."""
+        if not hasattr(self, '_tray'):
+            return
+
+        target_low = self.config['target_low']
+        target_high = self.config['target_high']
+        glucose_colors = self.config['appearance']['colors']['glucose_ranges']
+
+        if glucose < target_low:
+            bg_hex = glucose_colors['low']
+        elif glucose <= target_high:
+            bg_hex = glucose_colors['in_range']
+        else:
+            bg_hex = glucose_colors['high']
+
+        self._tray.setIcon(self._make_tray_icon(glucose, bg_hex))
+
+        age_text = self.age_label.text()
+        tooltip = f"{glucose} {trend_arrow}"
+        if delta_text:
+            tooltip += f" {delta_text.strip()}"
+        if age_text:
+            tooltip += f"\n{age_text}"
+        self._tray.setToolTip(f"NSOverlay\n{tooltip}")
+
+    def _toggle_visibility(self):
+        """Show or hide the main widget and update the tray menu label."""
+        if self.isVisible():
+            self.hide()
+            if hasattr(self, '_show_hide_action'):
+                self._show_hide_action.setText("Show NSOverlay")
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            if hasattr(self, '_show_hide_action'):
+                self._show_hide_action.setText("Hide NSOverlay")
+
+    def _on_tray_activated(self, reason):
+        """Toggle visibility on double-click of the tray icon."""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._toggle_visibility()
+
+    def _quit_app(self):
+        """Fully quit the application from the tray menu."""
+        if hasattr(self, '_tray'):
+            self._tray.hide()
+        self.save_position_and_size()
+        self.save_zoom_state()
+        QApplication.quit()
 
     # ===== Position & Size Memory =====
     def save_position_and_size(self):
@@ -2065,6 +1972,7 @@ class GlucoseWidget(QWidget):
                 self.age_label.setText(age_text)
             
             self.update_color(current)
+            self._update_tray_icon(current, trend_arrow, delta_text)
 
             if glucose_values:
                 y_min, y_max = self._compute_y_range(glucose_values)
@@ -2108,7 +2016,8 @@ class GlucoseWidget(QWidget):
             self.label.setText(error_text)
             self.time_label.setText("")
             self.age_label.setText("")
-            
+            if hasattr(self, '_tray'):
+                self._tray.setToolTip(f"NSOverlay\nError: {str(e)}")
             self.auto_resize_to_fit_content(error_text)
             self._apply_widget_background()
 
@@ -2978,6 +2887,8 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("NSOverlay")
     app.setApplicationDisplayName("NSOverlay")
+    # Keep the process alive when the main window is hidden (minimised to tray)
+    app.setQuitOnLastWindowClosed(False)
 
     _icon_path = os.path.join(_BASE_DIR, "icon.ico")
     if os.path.exists(_icon_path):
