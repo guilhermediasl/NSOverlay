@@ -1,0 +1,42 @@
+title = "NSOverlay Secret Detection"
+
+# ─── Nightscout URL ───────────────────────────────────────────────────────────
+[[rules]]
+id          = "nightscout-url"
+description = "Possible Nightscout URL accidentally committed"
+# Matches any http(s) URL on a typical Nightscout hosting provider
+regex       = '''https?://[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.(?:fly\.dev|herokuapp\.com|azurewebsites\.net|nightscout\.info|railway\.app|render\.com|vercel\.app|onrender\.com)(?:/[^\s"']*)?'''
+tags        = ["nightscout", "url"]
+
+[rules.allowlist]
+# Ignore common placeholder / documentation values (any URL starting with "your")
+regexes = [
+    '''https?://your''',
+    '''https?://example''',
+    '''https?://my-site''',
+    '''https?://my\.nightscout''',
+]
+
+# ─── Nightscout API secret ────────────────────────────────────────────────────
+[[rules]]
+id          = "nightscout-api-secret"
+description = "Nightscout API secret value committed in source"
+# Matches  "api_secret": "<value of 3+ chars>"
+regex       = '''"api_secret"\s*:\s*"[^"]{3,}"'''
+tags        = ["nightscout", "secret"]
+
+[rules.allowlist]
+# Ignore common placeholder values
+regexes = [
+    '''"api_secret"\s*:\s*"your_api_secret_here"''',
+    '''"api_secret"\s*:\s*"your[._-]api[._-]secret''',
+    '''"api_secret"\s*:\s*"<''',
+]
+
+# ─── Global allow-list ────────────────────────────────────────────────────────
+[allowlist]
+description = "Files that are intentionally allowed to contain placeholder values"
+paths = [
+    '''config\.json\.example$''',
+    '''README\.md$''',
+]
