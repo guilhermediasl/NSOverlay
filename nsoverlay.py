@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import hashlib
+import logging
+import logging.handlers
 import requests
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QMenu,
@@ -23,6 +25,39 @@ else:
 CONFIG_FILE = os.path.join(_BASE_DIR, "config.json")
 POSITION_FILE = os.path.join(_BASE_DIR, "widget_position.json")
 ZOOM_FILE = os.path.join(_BASE_DIR, "zoom_state.json")
+LOG_FILE = os.path.join(_BASE_DIR, "nsoverlay.log")
+
+# ── Logger setup ──────────────────────────────────────────────────────────────
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("nsoverlay")
+    logger.setLevel(logging.DEBUG)
+    if logger.handlers:
+        return logger  # already configured (e.g. reloaded module)
+
+    fmt = logging.Formatter(
+        "%(asctime)s  %(levelname)-7s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Rotating file handler: 1 MB per file, keep last 3 files.
+    # Only WARNING and above are written to disk — DEBUG stays in the terminal.
+    fh = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    fh.setLevel(logging.WARNING)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    # Mirror everything (including DEBUG) to stdout (visible in the Python terminal)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(logging.DEBUG)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    return logger
+
+log = _setup_logger()
+
 
 # ── Stylesheet loader ─────────────────────────────────────────────────────────
 def _load_qss(filename: str) -> str:
@@ -31,7 +66,7 @@ def _load_qss(filename: str) -> str:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
     except OSError:
-        print(f"Warning: stylesheet not found: {path}")
+        log.warning("Stylesheet not found: %s", path)
         return ""
 
 
@@ -145,7 +180,7 @@ def load_config():
     appearance = _deep_merge(_default_appearance, config.get("appearance", {}))
 
     settings = {
-        'refresh_interval': max(5000, int(config.get("refresh_interval_ms", 60000))),
+        'refresh_interval': max(5000, int(config.get("refresh_interval_ms", 10000))),
         'timezone_offset': float(config.get("timezone_offset_hours", 0)),
         'time_window_hours': max(0.25, float(config.get("time_window_hours", 3))),
         'target_low': target_low,
@@ -248,7 +283,7 @@ class SetupWizard(QDialog):
         config = {
             "nightscout_url": url,
             "api_secret": secret,
-            "refresh_interval_ms": 60000,
+            "refresh_interval_ms": 10000,
             "timezone_offset_hours": 0,
             "time_window_hours": 3,
             "target_low": 70,
@@ -400,6 +435,7 @@ class GlucoseWidget(QWidget):
         self.old_pos = None
         self.last_entry_time = None
         self._entries_cache = []   # in-memory store of raw entry dicts, sorted oldest-first
+        self._treatments_cache = []  # in-memory store of treatment dicts, sorted oldest-first
         self.resize_edge = None
         self.resize_start_pos = None
         self.resize_start_geometry = None
@@ -879,7 +915,8 @@ class GlucoseWidget(QWidget):
         # Update connection credentials if they changed
         if new_config.get('nightscout_url'):
             if new_config['nightscout_url'] != self.nightscout_url:
-                self._entries_cache = []   # new source → discard cached data
+                self._entries_cache = []       # new source → discard cached data
+                self._treatments_cache = []
             self.nightscout_url = new_config['nightscout_url']
         if new_config.get('api_secret_raw'):
             self.api_secret_raw = new_config['api_secret_raw']
@@ -891,13 +928,18 @@ class GlucoseWidget(QWidget):
         if new_entries_to_fetch > old_entries_to_fetch:
             self._entries_cache = []
 
+        old_treatments_to_fetch = self.config.get('treatments_to_fetch', 50)
+        new_treatments_to_fetch = new_config.get('treatments_to_fetch', old_treatments_to_fetch)
+        if new_treatments_to_fetch > old_treatments_to_fetch:
+            self._treatments_cache = []
+
         self.config.update(new_config)
         
         try:
             config_data = {
                 "nightscout_url": self.nightscout_url,
                 "api_secret": self.api_secret_raw,
-                "refresh_interval_ms": self.config.get('refresh_interval', 60000),
+                "refresh_interval_ms": self.config.get('refresh_interval', 10000),
                 "timezone_offset_hours": self.config.get('timezone_offset', 0),
                 "time_window_hours": self.config.get('time_window_hours', 1),
                 "entries_to_fetch": self.config.get('entries_to_fetch', 90),
@@ -921,7 +963,7 @@ class GlucoseWidget(QWidget):
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config_data, f, indent=4)
         except Exception as e:
-            print(f"Error saving config: {e}")
+            log.error("Error saving config: %s", e)
         
         self._apply_header_label_styles()
         
@@ -1188,7 +1230,7 @@ class GlucoseWidget(QWidget):
             with open(POSITION_FILE, "w") as f:
                 json.dump(data, f, indent=2)
         except (IOError, OSError) as e:
-            print(f"Warning: Could not save position and size: {e}")
+            log.warning("Could not save position and size: %s", e)
     
     def validate_position_on_screen_change(self):
         """Validate and adjust position when screen configuration changes"""
@@ -1279,7 +1321,7 @@ class GlucoseWidget(QWidget):
                 self.move(constrained_pos)
                 
             except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
-                print(f"Error loading position/size: {e}")
+                log.error("Error loading position/size: %s", e)
                 try:
                     os.remove(POSITION_FILE)
                 except:
@@ -1345,7 +1387,7 @@ class GlucoseWidget(QWidget):
                     self.position_save_timer.start()
                 
         except Exception as e:
-            print(f"Auto-resize failed: {e}")
+            log.warning("Auto-resize failed: %s", e)
     
     def save_zoom_state(self):
         """Save current Y-axis zoom state"""
@@ -1390,7 +1432,7 @@ class GlucoseWidget(QWidget):
         self.update_glucose()
         
         status = "ON" if self.config['gradient_interpolation'] else "OFF"
-        print(f"Gradient interpolation: {status}")
+        log.info("Gradient interpolation: %s", status)
         
         original_title = self.windowTitle()
         self.setWindowTitle(f"Gradient Interpolation: {status}")
@@ -1409,14 +1451,17 @@ class GlucoseWidget(QWidget):
             if (self.nightscout_url != old_url or
                     self.config.get('entries_to_fetch', 90) > old_config.get('entries_to_fetch', 90)):
                 self._entries_cache = []
+            if (self.nightscout_url != old_url or
+                    self.config.get('treatments_to_fetch', 50) > old_config.get('treatments_to_fetch', 50)):
+                self._treatments_cache = []
 
             if old_config['refresh_interval'] != self.config['refresh_interval']:
                 self.timer.setInterval(self.config['refresh_interval'])
             
             self.update_glucose()
-            print("Configuration reloaded successfully")
+            log.info("Configuration reloaded successfully")
         except Exception as e:
-            print(f"Error reloading config: {e}")
+            log.error("Error reloading config: %s", e)
     
     def save_config_setting(self, key, value):
         """Save a single setting to the config file"""
@@ -1427,7 +1472,7 @@ class GlucoseWidget(QWidget):
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4)
         except (OSError, json.JSONDecodeError) as e:
-            print(f"Error saving config setting '{key}': {e}")
+            log.error("Error saving config setting '%s': %s", key, e)
 
     # ===== Helper Methods =====
     def interpolate_color(self, base_color, target_color, factor):
@@ -1487,23 +1532,80 @@ class GlucoseWidget(QWidget):
         self.treatment_items = []
     
     def fetch_all_treatments(self):
-        """Fetch all treatment data from Nightscout (unfiltered)."""
+        """Fetch treatment data from Nightscout with minimal network traffic.
+
+        First call: fetches the full ``treatments_to_fetch`` window.
+        Subsequent calls: fetches 1 treatment to probe for new data.
+          - If the latest ID is already cached → skip (no second request).
+          - If a new ID is found → fetch 5 to catch up.
+        Falls back to the in-memory cache on network errors.
+        """
         try:
             headers = {"api-secret": self.api_secret}
             treatments_to_fetch = self.config.get('treatments_to_fetch', 50)
 
-            response = requests.get(
-                f"{self.nightscout_url}/api/v1/treatments.json?count={treatments_to_fetch}",
-                headers=headers,
-                timeout=5
-            )
+            if not self._treatments_cache:
+                # First load — fetch the full history window
+                url = f"{self.nightscout_url}/api/v1/treatments.json?count={treatments_to_fetch}"
+                log.debug("[TREATMENTS] First load: %s", url)
+                response = requests.get(url, headers=headers, timeout=5)
+                log.debug("[TREATMENTS] HTTP %s", response.status_code)
+                response.raise_for_status()
+                new_treatments = response.json()
+                log.debug("[TREATMENTS] Received %s treatments", len(new_treatments) if isinstance(new_treatments, list) else '?')
+            else:
+                # Probe: fetch only the single latest treatment
+                probe_url = f"{self.nightscout_url}/api/v1/treatments.json?count=1"
+                log.debug("[TREATMENTS] Probing: %s  (cache has %d items, last_id=%s)", probe_url, len(self._treatments_cache), self._treatments_cache[-1].get('_id'))
+                probe_resp = requests.get(probe_url, headers=headers, timeout=5)
+                log.debug("[TREATMENTS] Probe HTTP %s", probe_resp.status_code)
+                probe_resp.raise_for_status()
+                probe = probe_resp.json()
 
-            response.raise_for_status()
-            return response.json()
+                if not isinstance(probe, list):
+                    raise ValueError(f"Unexpected API response type: {type(probe).__name__}")
+
+                probe_id = probe[0].get("_id") if probe else None
+                cached_id = self._treatments_cache[-1].get("_id")
+                log.debug("[TREATMENTS] Probe latest _id=%s  cached latest _id=%s", probe_id, cached_id)
+
+                # No new treatment — return cache as-is
+                if not probe or probe_id == cached_id:
+                    log.debug("[TREATMENTS] No new treatment — returning cache")
+                    return list(self._treatments_cache)
+
+                # New treatment detected — fetch a small batch to catch up
+                url = f"{self.nightscout_url}/api/v1/treatments.json?count=5"
+                log.debug("[TREATMENTS] New treatment detected, fetching batch: %s", url)
+                response = requests.get(url, headers=headers, timeout=5)
+                log.debug("[TREATMENTS] Batch HTTP %s", response.status_code)
+                response.raise_for_status()
+                new_treatments = response.json()
+                log.debug("[TREATMENTS] Batch received %s treatments", len(new_treatments) if isinstance(new_treatments, list) else '?')
+
+            if not isinstance(new_treatments, list):
+                raise ValueError(f"Unexpected API response type: {type(new_treatments).__name__}")
+
+            if new_treatments:
+                existing_ids = {t.get("_id") for t in self._treatments_cache}
+                added = 0
+                for t in new_treatments:
+                    if isinstance(t, dict) and t.get("_id") not in existing_ids:
+                        self._treatments_cache.append(t)
+                        existing_ids.add(t.get("_id"))
+                        added += 1
+                # Sort oldest-first by created_at and trim to the configured window
+                self._treatments_cache.sort(key=lambda t: t.get("created_at", ""))
+                if len(self._treatments_cache) > treatments_to_fetch:
+                    self._treatments_cache = self._treatments_cache[-treatments_to_fetch:]
+                log.debug("[TREATMENTS] Added %d new items. Cache size: %d", added, len(self._treatments_cache))
+
+            return list(self._treatments_cache)
 
         except Exception as e:
-            print(f"Error fetching treatments: {e}")
-            return []
+            log.error("[TREATMENTS] Error fetching treatments: %s", e)
+            # Return whatever we have cached so the UI stays populated
+            return list(self._treatments_cache)
     
     def add_treatments_to_graph(self, treatments):
         """Add treatment markers to the graph"""
@@ -1671,7 +1773,7 @@ class GlucoseWidget(QWidget):
                         self.treatment_items.append(exercise_label)
                     
             except Exception as e:
-                print(f"Error adding treatment marker: {e}")
+                log.error("Error adding treatment marker: %s", e)
                 continue
     
     def update_glucose(self):
@@ -1690,31 +1792,46 @@ class GlucoseWidget(QWidget):
             # Subsequent polls: use the _id of the newest cached entry as a cursor so
             # the server returns ONLY documents created after it — no duplication, no
             # fixed count guess needed.
-            last_id = self._entries_cache[-1].get("_id") if self._entries_cache else None
-            if last_id:
+            last_date_ms = self._entries_cache[-1].get("date") if self._entries_cache else None
+            if last_date_ms:
                 url = (f"{self.nightscout_url}/api/v1/entries.json"
-                       f"?find[_id][$gt]={last_id}&count={entries_to_fetch}")
+                       f"?find[date][$gt]={last_date_ms}&count=5")
             else:
                 url = (f"{self.nightscout_url}/api/v1/entries.json"
                        f"?count={entries_to_fetch}")
 
+            log.debug("[ENTRIES] Requesting: %s", url)
+            log.debug("[ENTRIES] Cache before fetch: %d entries, last_date_ms=%s", len(self._entries_cache), last_date_ms)
+
             response = requests.get(url, headers=headers, timeout=5)
 
+            log.debug("[ENTRIES] HTTP %s", response.status_code)
             response.raise_for_status()
             new_entries = response.json()
             if not isinstance(new_entries, list):
                 raise ValueError(f"Unexpected API response type: {type(new_entries).__name__}")
 
-            # Append truly-new entries (cursor guarantees no dupes, but guard anyway)
+            log.debug("[ENTRIES] Received %d new entries from server", len(new_entries))
+
+            # Append truly-new entries (date cursor prevents dupes, but guard anyway)
             if new_entries:
                 existing_keys = {e.get("_id") for e in self._entries_cache}
+                added = 0
                 for entry in new_entries:
                     if isinstance(entry, dict) and entry.get("_id") not in existing_keys:
                         self._entries_cache.append(entry)
                         existing_keys.add(entry.get("_id"))
+                        added += 1
                 self._entries_cache.sort(key=lambda e: e.get("date", 0))
                 if len(self._entries_cache) > entries_to_fetch:
                     self._entries_cache = self._entries_cache[-entries_to_fetch:]
+                log.debug("[ENTRIES] Added %d truly-new entries. Cache size: %d", added, len(self._entries_cache))
+            else:
+                log.debug("[ENTRIES] No new entries returned — cache unchanged (%d entries)", len(self._entries_cache))
+
+            if self._entries_cache:
+                latest = self._entries_cache[-1]
+                log.debug("[ENTRIES] Latest cached: sgv=%s, dateString=%s, _id=%s", latest.get('sgv'), latest.get('dateString'), latest.get('_id'))
 
             entries = list(self._entries_cache)
 
@@ -1750,7 +1867,7 @@ class GlucoseWidget(QWidget):
                         except ValueError:
                             continue
                 if timestamp is None:
-                    print(f"Warning: could not parse dateString {date_str!r}, skipping entry")
+                    log.warning("Could not parse dateString %r, skipping entry", date_str)
                     continue
                 local_timestamp = timestamp + timedelta(hours=self.timezone_offset)
                 unix_timestamp = local_timestamp.timestamp()
