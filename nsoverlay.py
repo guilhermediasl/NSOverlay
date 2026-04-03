@@ -5,13 +5,14 @@ import hashlib
 import logging
 import logging.handlers
 import requests
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QMenu,
                              QSlider, QSpinBox, QDoubleSpinBox, QPushButton, QDialog, QFormLayout,
                              QGroupBox, QLineEdit, QTabWidget, QCheckBox, QComboBox, QListWidget,
                              QScrollArea, QColorDialog, QFrame, QGraphicsDropShadowEffect,
                              QSystemTrayIcon)
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QAction, QFontMetrics, QPixmap, QPainter, QIcon
 import pyqtgraph as pg
 
@@ -92,6 +93,136 @@ class TimeAxisItem(pg.AxisItem):
         return strings
 
 
+class RemoteFetchThread(QThread):
+    """Persistent background worker thread for Nightscout fetches."""
+
+    resultReady = pyqtSignal(dict)
+    fetchError = pyqtSignal(str)
+
+    def __init__(self, payload=None, parent=None):
+        super().__init__(parent)
+        self._lock = threading.Condition()
+        self._latest_payload = payload
+        self._stop = False
+        self._session = requests.Session()
+
+    def submit(self, payload):
+        with self._lock:
+            self._latest_payload = payload
+            self._lock.notify()
+
+    def stop(self):
+        with self._lock:
+            self._stop = True
+            self._lock.notify()
+
+    def run(self):
+        while True:
+            with self._lock:
+                while not self._stop and self._latest_payload is None:
+                    self._lock.wait()
+
+                if self._stop:
+                    self._close_session()
+                    return
+
+                payload = self._latest_payload
+                self._latest_payload = None
+
+            try:
+                result = self._fetch_once(payload)
+                self.resultReady.emit(result)
+            except Exception as e:
+                self.fetchError.emit(str(e))
+
+    def _close_session(self):
+        try:
+            self._session.close()
+        except Exception:
+            pass
+
+    def _fetch_once(self, payload):
+        headers = {"api-secret": payload["api_secret"]}
+        base_url = payload["nightscout_url"]
+
+        entries_cache = list(payload.get("entries_cache", []))
+        entries_to_fetch = int(payload.get("entries_to_fetch", 90))
+        entries_to_fetch = max(1, min(entries_to_fetch, 288))
+        fetch_remote = bool(payload.get("fetch_remote", True))
+
+        if fetch_remote or not entries_cache:
+            last_date_ms = entries_cache[-1].get("date") if entries_cache else None
+            if last_date_ms:
+                url = (f"{base_url}/api/v1/entries.json"
+                       f"?find[date][$gt]={last_date_ms}&count=5")
+            else:
+                url = f"{base_url}/api/v1/entries.json?count={entries_to_fetch}"
+
+            response = self._session.get(url, headers=headers, timeout=5)
+            response.raise_for_status()
+            new_entries = response.json()
+            if not isinstance(new_entries, list):
+                raise ValueError(f"Unexpected entries response type: {type(new_entries).__name__}")
+
+            if new_entries:
+                existing_ids = {e.get("_id") for e in entries_cache}
+                for entry in new_entries:
+                    if isinstance(entry, dict) and entry.get("_id") not in existing_ids:
+                        entries_cache.append(entry)
+                        existing_ids.add(entry.get("_id"))
+                entries_cache.sort(key=lambda e: e.get("date", 0))
+                if len(entries_cache) > entries_to_fetch:
+                    entries_cache = entries_cache[-entries_to_fetch:]
+
+        treatments_cache = list(payload.get("treatments_cache", []))
+        fetch_treatments = bool(payload.get("fetch_treatments", False))
+        treatments_to_fetch = int(payload.get("treatments_to_fetch", 50))
+        treatments_to_fetch = max(1, min(treatments_to_fetch, 500))
+
+        if fetch_treatments:
+            if not treatments_cache:
+                t_url = f"{base_url}/api/v1/treatments.json?count={treatments_to_fetch}"
+                t_resp = self._session.get(t_url, headers=headers, timeout=5)
+                t_resp.raise_for_status()
+                new_treatments = t_resp.json()
+                if not isinstance(new_treatments, list):
+                    raise ValueError(f"Unexpected treatments response type: {type(new_treatments).__name__}")
+            else:
+                probe_url = f"{base_url}/api/v1/treatments.json?count=1"
+                probe_resp = self._session.get(probe_url, headers=headers, timeout=5)
+                probe_resp.raise_for_status()
+                probe = probe_resp.json()
+                if not isinstance(probe, list):
+                    raise ValueError(f"Unexpected treatments response type: {type(probe).__name__}")
+
+                probe_id = probe[0].get("_id") if probe else None
+                cached_id = treatments_cache[-1].get("_id")
+
+                if not probe or probe_id == cached_id:
+                    new_treatments = []
+                else:
+                    t_url = f"{base_url}/api/v1/treatments.json?count=5"
+                    t_resp = self._session.get(t_url, headers=headers, timeout=5)
+                    t_resp.raise_for_status()
+                    new_treatments = t_resp.json()
+                    if not isinstance(new_treatments, list):
+                        raise ValueError(f"Unexpected treatments response type: {type(new_treatments).__name__}")
+
+            if new_treatments:
+                existing_t_ids = {t.get("_id") for t in treatments_cache}
+                for treatment in new_treatments:
+                    if isinstance(treatment, dict) and treatment.get("_id") not in existing_t_ids:
+                        treatments_cache.append(treatment)
+                        existing_t_ids.add(treatment.get("_id"))
+                treatments_cache.sort(key=lambda t: t.get("created_at", ""))
+                if len(treatments_cache) > treatments_to_fetch:
+                    treatments_cache = treatments_cache[-treatments_to_fetch:]
+
+        return {
+            "entries_cache": entries_cache,
+            "treatments_cache": treatments_cache,
+        }
+
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -123,18 +254,20 @@ def load_config():
 
     # Hash secret (Nightscout requires SHA1)
     hashed_secret = hashlib.sha1(secret.encode()).hexdigest()
-    
+
     _default_appearance = {
         "marker_outline_width": 1.5,
         "marker_outline_color": "#000000",
         "graph_line_width": 2,
         "graph_line_style": "solid",
+        "graph_line_smooth": True,
         "show_y_label": True,
         "target_zone_opacity": 20,
         "grid_opacity": 0.3,
         "background_color": "#1a1a1a",
         "graph_background_opacity": 100,
-        "label_pill_opacity": 67,
+        "transparency_enabled": True,
+        "label_pill_opacity": 40,
         "colors": {
             "ui": {
                 "main_glucose_text": "#ffffff",
@@ -144,7 +277,8 @@ def load_config():
                 "close_button_hover": "#ff6666",
                 "close_button_background": "rgba(0, 0, 0, 150)",
                 "close_button_hover_background": "rgba(255, 68, 68, 200)",
-                "widget_background": "#2a2a2a"
+                "widget_background": "#2a2a2a",
+                "header_background": "#0d0d0d"
             },
             "graph": {
                 "axis_lines": "#888888",
@@ -183,6 +317,7 @@ def load_config():
         'refresh_interval': max(5000, int(config.get("refresh_interval_ms", 10000))),
         'timezone_offset': float(config.get("timezone_offset_hours", 0)),
         'time_window_hours': max(0.25, float(config.get("time_window_hours", 3))),
+        'entries_to_fetch': max(10, min(500, int(config.get("entries_to_fetch", 90)))),
         'target_low': target_low,
         'target_high': target_high,
         'widget_width': max(150, int(config.get("widget_width", 400))),
@@ -191,9 +326,12 @@ def load_config():
         'time_font_size': max(6, int(config.get("time_font_size", 12))),
         'age_font_size': max(6, int(config.get("age_font_size", 10))),
         'data_point_size': max(2, int(config.get("data_point_size", 6))),
+        'adaptive_dot_size': bool(config.get("adaptive_dot_size", False)),
+        'show_delta': bool(config.get("show_delta", True)),
         'show_treatments': bool(config.get("show_treatments", True)),
         'treatments_to_fetch': max(1, min(500, int(config.get("treatments_to_fetch", 50)))),
         'gradient_interpolation': bool(config.get("gradient_interpolation", True)),
+        'show_float_glucose': bool(config.get("show_float_glucose", True)),
         'header_pills': config.get('header_pills', []),
         'appearance': appearance
     }
@@ -215,13 +353,14 @@ class SetupWizard(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
 
         title = QLabel("Welcome to NSOverlay")
-        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        title.setFont(QFont("sans-serif", 14, QFont.Weight.Bold))
+        title.setObjectName("DialogTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         subtitle = QLabel("Enter your Nightscout credentials to get started.")
+        subtitle.setObjectName("DialogSubtitle")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #7070aa; font-size: 10px;")
         layout.addWidget(subtitle)
 
         layout.addSpacing(8)
@@ -245,8 +384,8 @@ class SetupWizard(QDialog):
         layout.addSpacing(6)
 
         self.status_label = QLabel("")
+        self.status_label.setObjectName("StatusError")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: #ff4444;")
         layout.addWidget(self.status_label)
 
         btn_layout = QHBoxLayout()
@@ -264,7 +403,6 @@ class SetupWizard(QDialog):
 
         self.setLayout(layout)
         self.setStyleSheet(DARK_QSS)
-        title.setStyleSheet("color: #00d4aa; font-size: 14pt; font-weight: bold; background: transparent;")
 
     def _save(self):
         url = self.url_input.text().strip().rstrip("/")
@@ -327,6 +465,7 @@ class GlucoseWidget(QWidget):
         )
         # Required for graph background transparency to show through
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
 
         # Store original configured dimensions
         self.base_width = self.config['widget_width']
@@ -338,84 +477,80 @@ class GlucoseWidget(QWidget):
         self.resize(self.base_width, self.base_height)
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(8, 8, 8, 8)
-        self.main_layout.setSpacing(3)
+        self.main_layout.setSpacing(0)
         self.setLayout(self.main_layout)
 
         self.header_layout = QHBoxLayout()
-        self.header_layout.setContentsMargins(0, 0, 0, 0)
-        self.header_layout.setSpacing(20)
+        self.header_layout.setContentsMargins(10, 6, 10, 4)
+        self.header_layout.setSpacing(12)
         
         self.left_info_layout = QVBoxLayout()
         self.left_info_layout.setContentsMargins(0, 0, 0, 0)
         self.left_info_layout.setSpacing(1)
         
         self.time_label = QLabel("")
+        self.time_label.setObjectName("HeaderTime")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_label.setFont(QFont("Segoe UI", self.config['time_font_size'], QFont.Weight.Medium))
-        self.time_label.setStyleSheet("color: #cccccc;")
+        self.time_label.setFont(QFont("sans-serif", self.config['time_font_size'], QFont.Weight.Medium))
         
         self.age_label = QLabel("")
+        self.age_label.setObjectName("HeaderAge")
         self.age_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.age_label.setFont(QFont("Segoe UI", self.config['age_font_size'] - 1, QFont.Weight.Normal))
-        self.age_label.setStyleSheet("color: #999999;")
+        self.age_label.setFont(QFont("sans-serif", self.config['age_font_size'] - 1, QFont.Weight.Normal))
         
         self.left_info_layout.addWidget(self.time_label)
         self.left_info_layout.addWidget(self.age_label)
         
         self.label = QLabel("Loading...")
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setFont(QFont("Segoe UI", self.config['glucose_font_size'], QFont.Weight.Bold))
-        self.label.setStyleSheet("color: #ffffff;")
+        self.label.setObjectName("HeaderGlucose")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.label.setFont(QFont("sans-serif", self.config['glucose_font_size'], QFont.Weight.Bold))
+
+        # Vertical divider between time/age and glucose
+        self.header_sep = QFrame()
+        self.header_sep.setObjectName("HeaderSeparator")
+        self.header_sep.setFrameShape(QFrame.Shape.VLine)
+        self.header_sep.setFrameShadow(QFrame.Shadow.Plain)
+        self.header_sep.setFixedWidth(1)
         
-        # Pills container – sits on the left edge of the header row
-        self.pills_layout = QHBoxLayout()
+        # Pills container – sits on the left edge of the header row, stacked vertically
+        self.pills_layout = QVBoxLayout()
         self.pills_layout.setContentsMargins(0, 0, 0, 0)
-        self.pills_layout.setSpacing(5)
+        self.pills_layout.setSpacing(3)
         self.header_pills_widget = QWidget()
+        self.header_pills_widget.setObjectName("HeaderPillsContainer")
         self.header_pills_widget.setLayout(self.pills_layout)
-        self.header_pills_widget.setStyleSheet("background: transparent;")
         self.header_pills_widget.hide()
 
         self.header_layout.addWidget(self.header_pills_widget, 0)
         self.header_layout.addStretch(1)
         self.header_layout.addLayout(self.left_info_layout, 0)
+        self.header_layout.addStretch(1)
+        self.header_layout.addWidget(self.header_sep, 0)
         self.header_layout.addWidget(self.label, 0)
         
-        header_widget = QWidget()
-        header_widget.setLayout(self.header_layout)
-        header_widget.setFixedHeight(40)
-        header_widget.setStyleSheet("background: transparent;")
-        self.main_layout.addWidget(header_widget)
+        self.header_bar = QWidget()
+        self.header_bar.setObjectName("HeaderBar")
+        self.header_bar.setLayout(self.header_layout)
+        self.header_bar.setFixedHeight(58)
+        self.main_layout.addWidget(self.header_bar)
 
         self.close_button = QLabel("✕", self)
+        self.close_button.setObjectName("CloseButton")
         self.close_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.close_button.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        close_button_hover = self.config['appearance']['colors']['ui']['close_button_hover']
-
-        # WA_TranslucentBackground means mouse events are skipped over transparent pixels,
-        # so hide/show on enter/leave is unreliable — poll instead.
-        self.close_button.setStyleSheet(f"""
-            QLabel {{
-                color: rgba(255, 255, 255, 55);
-                background-color: rgba(20, 20, 20, 100);
-                border-radius: 15px;
-                padding: 2px;
-                margin: 0px;
-                border: 1px solid rgba(255, 255, 255, 20);
-            }}
-            QLabel:hover {{
-                background-color: rgba(190, 30, 30, 230);
-                color: rgba(255, 255, 255, 255);
-                border: 1px solid rgba(255, 90, 90, 140);
-            }}
-        """)
-        self.close_button.setFixedSize(30, 30)
+        self.close_button.setFont(QFont("sans-serif", 16, QFont.Weight.Bold))
+        self.close_button.setFixedSize(34, 34)
         self.close_button.hide()
         self.close_button.mousePressEvent = lambda ev: (self.close(), None)[1]  # type: ignore[method-assign]
+        self._apply_close_button_style(False)
 
         self.setup_graph()
         self._apply_header_label_styles()
+        self._apply_header_background()
+        self._apply_dynamic_header_fonts()
         self.setup_shortcuts()
+        self._has_visible_pills = False
+        self._tray_pill_texts = []
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_glucose)
@@ -436,9 +571,27 @@ class GlucoseWidget(QWidget):
         self.last_entry_time = None
         self._entries_cache = []   # in-memory store of raw entry dicts, sorted oldest-first
         self._treatments_cache = []  # in-memory store of treatment dicts, sorted oldest-first
+        self._fetch_thread = RemoteFetchThread(None, self)
+        self._fetch_thread.resultReady.connect(self._on_remote_fetch_result)
+        self._fetch_thread.fetchError.connect(self._on_remote_fetch_error)
+        self._fetch_thread.start()
+        self._datetime_parse_cache = {}
+        self._datetime_parse_cache_max = 4096
+        self._last_render_key = None
+        self._last_treatment_render_key = None
+        self._last_header_pill_render_key = None
+        self._last_time_text = None
+        self._last_age_text = None
+        self._last_age_color = None
+        self._last_glucose_stale_state = None
+        self._last_tray_icon_key = None
+        self._last_tray_icon = None
+        self._brush_cache = {}
+        self._pen_cache = {}
         self.resize_edge = None
         self.resize_start_pos = None
         self.resize_start_geometry = None
+        self.resize_edge_margin = 16
         
         # Position saving timer to avoid excessive saves during dragging
         self.position_save_timer = QTimer()
@@ -461,12 +614,57 @@ class GlucoseWidget(QWidget):
                 screen.geometryChanged.connect(self.validate_position_on_screen_change)
 
         self._setup_tray()
+
+    def _parse_ns_datetime(self, value):
+        """Parse Nightscout ISO timestamps and return naive UTC datetime."""
+        if not value:
+            return None
+
+        raw = str(value).strip()
+        if not raw:
+            return None
+
+        cached = self._datetime_parse_cache.get(raw)
+        if raw in self._datetime_parse_cache:
+            return cached
+
+        iso_value = raw
+        if iso_value.endswith('Z'):
+            iso_value = iso_value[:-1] + '+00:00'
+
+        try:
+            dt = datetime.fromisoformat(iso_value)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            self._datetime_parse_cache[raw] = dt
+            if len(self._datetime_parse_cache) > self._datetime_parse_cache_max:
+                self._datetime_parse_cache.pop(next(iter(self._datetime_parse_cache)))
+            return dt
+        except ValueError:
+            pass
+
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                self._datetime_parse_cache[raw] = dt
+                if len(self._datetime_parse_cache) > self._datetime_parse_cache_max:
+                    self._datetime_parse_cache.pop(next(iter(self._datetime_parse_cache)))
+                return dt
+            except ValueError:
+                continue
+
+        self._datetime_parse_cache[raw] = None
+        if len(self._datetime_parse_cache) > self._datetime_parse_cache_max:
+            self._datetime_parse_cache.pop(next(iter(self._datetime_parse_cache)))
+        return None
         
     def resizeEvent(self, event):
         """Position the close button in top-right corner when widget is resized"""
         super().resizeEvent(event)
         if hasattr(self, 'close_button'):
-            self.close_button.move(self.width() - 32, 3)
+            self.close_button.move(self.width() - 38, 3)
+        self._apply_dynamic_header_fonts()
+        self._apply_responsive_header_layout()
         
         if hasattr(self, 'user_resized') and event.oldSize().isValid():
             old_size = event.oldSize()
@@ -481,13 +679,83 @@ class GlucoseWidget(QWidget):
         """Show/hide close button based on whether the cursor is inside the widget.
         Needed because enterEvent/leaveEvent miss transparent-pixel areas."""
         from PyQt6.QtGui import QCursor
-        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        cursor_pos = self.mapFromGlobal(QCursor.pos())
+        inside = self.rect().contains(cursor_pos)
+        if not (self.resize_edge or self.old_pos):
+            self._update_hover_cursor(cursor_pos)
         if hasattr(self, 'close_button'):
-            if inside and not self.close_button.isVisible():
-                self.close_button.show()
-                self.close_button.raise_()
-            elif not inside and self.close_button.isVisible():
+            if inside:
+                if not self.close_button.isVisible():
+                    self.close_button.show()
+                    self.close_button.raise_()
+                self._apply_close_button_style(True)
+            elif self.close_button.isVisible():
                 self.close_button.hide()
+                self._apply_close_button_style(False)
+            else:
+                self._apply_close_button_style(False)
+
+    def _apply_close_button_style(self, hovered=False):
+        """Apply close button colors from appearance settings."""
+        if not hasattr(self, 'close_button'):
+            return
+        ui_colors = self.config.get('appearance', {}).get('colors', {}).get('ui', {})
+        text_color = ui_colors.get('close_button_hover', '#ff6666') if hovered else ui_colors.get('close_button', '#ff4444')
+        bg_color = (
+            ui_colors.get('close_button_hover_background', 'rgba(255,68,68,200)')
+            if hovered else ui_colors.get('close_button_background', 'rgba(0,0,0,150)')
+        )
+        self.close_button.setStyleSheet(
+            f"color: {text_color}; background-color: {bg_color}; border-radius: 17px;"
+        )
+
+    def _update_hover_cursor(self, pos):
+        if self.resize_edge or self.old_pos:
+            return
+
+        edge = self.get_resize_edge(pos)
+        cursor = self.get_resize_cursor(edge)
+        if self.cursor().shape() != cursor:
+            self.setCursor(cursor)
+
+    def _apply_responsive_header_layout(self):
+        """Adapt header density for narrow widget sizes to preserve readability."""
+        w = self.width()
+        compact = w < 360
+
+        self.header_layout.setSpacing(8 if compact else 12)
+        self.header_layout.setContentsMargins(8 if compact else 10, 6, 8 if compact else 10, 4)
+
+        if hasattr(self, 'header_sep'):
+            self.header_sep.setVisible(w >= 280)
+
+        if hasattr(self, 'header_pills_widget'):
+            # Keep pills visible even on compact widths; text is already elided.
+            self.header_pills_widget.setVisible(self._has_visible_pills)
+
+    def _apply_dynamic_header_fonts(self):
+        """Scale header typography for compact widths while respecting configured sizes."""
+        w = self.width()
+        glucose_base = max(8, int(self.config.get('glucose_font_size', 18)))
+        time_base = max(6, int(self.config.get('time_font_size', 12)))
+        age_base = max(6, int(self.config.get('age_font_size', 10)) - 1)
+
+        if w < 280:
+            glucose_size = max(10, glucose_base - 4)
+            time_size = max(8, time_base - 2)
+            age_size = max(7, age_base - 2)
+        elif w < 340:
+            glucose_size = max(11, glucose_base - 2)
+            time_size = max(9, time_base - 1)
+            age_size = max(8, age_base - 1)
+        else:
+            glucose_size = glucose_base
+            time_size = time_base
+            age_size = age_base
+
+        self.label.setFont(QFont("sans-serif", glucose_size, QFont.Weight.Bold))
+        self.time_label.setFont(QFont("sans-serif", time_size, QFont.Weight.Medium))
+        self.age_label.setFont(QFont("sans-serif", age_size, QFont.Weight.Normal))
 
     def enterEvent(self, event):
         super().enterEvent(event)
@@ -505,8 +773,11 @@ class GlucoseWidget(QWidget):
 
     def _update_graph_background(self):
         """Apply graph background color with configured opacity (0-100)."""
-        opacity = self.config['appearance'].get('graph_background_opacity', 100)
-        bg_color = self.config['appearance'].get('background_color', '#1a1a1a')
+        appearance = self.config['appearance']
+        slider_opacity = int(appearance.get('graph_background_opacity', 100))
+        opacity = slider_opacity if appearance.get('transparency_enabled', True) else 100
+        graph_colors = appearance.get('colors', {}).get('graph', {})
+        bg_color = graph_colors.get('background', appearance.get('background_color', '#1a1a1a'))
         color = QColor(bg_color)
         color.setAlpha(round(opacity / 100 * 255))
         self.graph.setBackground(color)
@@ -514,18 +785,33 @@ class GlucoseWidget(QWidget):
     def _apply_widget_background(self):
         """Apply widget background color with configured opacity (matches graph opacity).
         Uses the object-name selector so the rule does NOT cascade to child widgets."""
-        opacity = self.config['appearance'].get('graph_background_opacity', 100)
+        appearance = self.config['appearance']
+        slider_opacity = int(appearance.get('graph_background_opacity', 100))
+        opacity = slider_opacity if appearance.get('transparency_enabled', True) else 100
         widget_bg = self.config['appearance']['colors']['ui']['widget_background']
         color = QColor(widget_bg)
         alpha = round(opacity / 100 * 255)
         rgba = f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
-        self.setStyleSheet(f"#GlucoseWidget {{ background-color: {rgba}; }}")
+        self.setStyleSheet(f"#GlucoseWidget {{ background-color: {rgba}; border-radius: 10px; }}")
+
+    def _apply_header_background(self):
+        """Apply header bar background color with same opacity as the graph."""
+        appearance = self.config['appearance']
+        slider_opacity = int(appearance.get('graph_background_opacity', 100))
+        opacity = slider_opacity if appearance.get('transparency_enabled', True) else 100
+        header_bg = appearance.get('colors', {}).get('ui', {}).get('header_background', '#0d0d0d')
+        color = QColor(header_bg)
+        alpha = round(opacity / 100 * 255)
+        rgba = f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
+        self.header_bar.setStyleSheet(f"#HeaderBar {{ background-color: {rgba}; }}")
 
     def _update_header_pills(self, treatments):
         """Rebuild header pill labels based on the latest treatments and current config.
 
         Each entry in config['header_pills'] may have:
-          event_type    (str, required)  – matches treatment eventType (case-insensitive)
+                    event_type    (str, required)  – matches treatment eventType (case-insensitive)
+                    event_types   (list[str])      – optional list of event types; overrides event_type
+                                                                                     when present and non-empty
           label         (str)            – display label; defaults to event_type
           show_field    (str)            – treatment field whose value is shown/summed
           suffix        (str)            – text appended after the value (e.g. "U", "g")
@@ -535,6 +821,11 @@ class GlucoseWidget(QWidget):
                                            on the current local day (uses timezone_offset)
         """
         pill_configs = self.config.get('header_pills', [])
+        pill_render_key = self._build_header_pill_render_key(treatments)
+        if pill_render_key == self._last_header_pill_render_key:
+            return
+
+        pill_texts = []
 
         # Clear all items from pills layout
         while self.pills_layout.count():
@@ -544,11 +835,18 @@ class GlucoseWidget(QWidget):
                 w.deleteLater()
 
         if not pill_configs:
+            self._has_visible_pills = False
+            self._tray_pill_texts = []
             self.header_pills_widget.hide()
+            if hasattr(self, '_last_tray_glucose'):
+                self._refresh_tray_tooltip(
+                    self._last_tray_glucose,
+                    self._last_tray_trend,
+                    self._last_tray_delta,
+                    bool(getattr(self, '_tray_was_stale', False)),
+                )
             return
 
-        pill_opacity_pct = self.config['appearance'].get('label_pill_opacity', 67)
-        pill_alpha = round(pill_opacity_pct / 100 * 255)
         now_utc = datetime.utcnow()
         local_today = (now_utc + timedelta(hours=self.timezone_offset)).date()
 
@@ -559,61 +857,126 @@ class GlucoseWidget(QWidget):
             fx.setColor(QColor(0, 0, 0, 200))
             return fx
 
-        def _parse_treatment_time(created_at):
-            try:
-                return datetime.strptime(created_at.split('.')[0] + 'Z', "%Y-%m-%dT%H:%M:%SZ")
-            except ValueError:
-                try:
-                    return datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S")
-                except ValueError:
-                    return None
+        treatments_by_event = {}
+        for treatment in treatments:
+            event_type = treatment.get('eventType', '').lower()
+            if not event_type:
+                continue
+            created_utc = self._parse_ns_datetime(treatment.get('created_at', ''))
+            treatments_by_event.setdefault(event_type, []).append((treatment, created_utc))
+
+        def _event_keys_for_pill(pill_cfg):
+            event_types = pill_cfg.get('event_types')
+            keys = []
+
+            if isinstance(event_types, list):
+                for event_type in event_types:
+                    if isinstance(event_type, str):
+                        normalized = event_type.strip().lower()
+                        if normalized and normalized not in keys:
+                            keys.append(normalized)
+
+            if not keys:
+                event_type_cfg = pill_cfg.get('event_type', '')
+                if isinstance(event_type_cfg, str):
+                    separators = ['|', ',']
+                    expanded = [event_type_cfg]
+                    for sep in separators:
+                        if any(sep in part for part in expanded):
+                            next_parts = []
+                            for part in expanded:
+                                next_parts.extend(part.split(sep))
+                            expanded = next_parts
+                    for raw_key in expanded:
+                        normalized = raw_key.strip().lower()
+                        if normalized and normalized not in keys:
+                            keys.append(normalized)
+
+            return keys
 
         pills_added = 0
 
         for pill_cfg in pill_configs:
-            event_type_cfg = pill_cfg.get('event_type', '')
-            if not event_type_cfg:
+            if not bool(pill_cfg.get('enabled', True)):
                 continue
 
-            label_text = pill_cfg.get('label', event_type_cfg)
+            event_keys = _event_keys_for_pill(pill_cfg)
+            if not event_keys:
+                continue
+
+            matching_treatments = []
+            seen_treatment_ids = set()
+            for event_key in event_keys:
+                for treatment, treatment_time in treatments_by_event.get(event_key, []):
+                    treatment_id = treatment.get('_id')
+                    unique_key = treatment_id if treatment_id is not None else id(treatment)
+                    if unique_key in seen_treatment_ids:
+                        continue
+                    seen_treatment_ids.add(unique_key)
+                    matching_treatments.append((treatment, treatment_time))
+
+            if not matching_treatments:
+                continue
+
+            default_label = pill_cfg.get('event_type', '') or '/'.join(event_keys)
+            label_text = pill_cfg.get('label', default_label)
             show_field = pill_cfg.get('show_field')
+            show_fields = pill_cfg.get('show_fields', [])
             suffix = pill_cfg.get('suffix', '')
+            suffix_map = pill_cfg.get('suffix_map', {})  # e.g., {"insulin": "U", "carbs": "g"}
             sum_daily = bool(pill_cfg.get('sum_daily', False))
             max_age_hours = float(pill_cfg.get('max_age_hours', 24))
 
+            # Normalize show_field and show_fields into a list
+            if show_fields and isinstance(show_fields, list):
+                fields_list = show_fields
+            elif show_field:
+                if isinstance(show_field, list):
+                    fields_list = show_field
+                else:
+                    fields_list = [show_field]
+            else:
+                continue
+
+            # Helper to get suffix for a field
+            def get_field_suffix(field):
+                if isinstance(suffix_map, dict) and field in suffix_map:
+                    return suffix_map[field]
+                return suffix
+
             value_str = ''
 
-            if sum_daily and show_field:
-                # Sum show_field for all matching treatments on the current local day
-                total = 0.0
+            if sum_daily:
+                # Sum each field for all matching treatments on the current local day
+                field_totals = {field: 0.0 for field in fields_list}
                 found_any = False
-                for t in treatments:
-                    if t.get('eventType', '').lower() != event_type_cfg.lower():
-                        continue
-                    t_time = _parse_treatment_time(t.get('created_at', ''))
+                for t, t_time in matching_treatments:
                     if t_time is None:
                         continue
                     t_local_date = (t_time + timedelta(hours=self.timezone_offset)).date()
                     if t_local_date != local_today:
                         continue
-                    raw_val = t.get(show_field)
-                    try:
-                        total += float(raw_val)
-                        found_any = True
-                    except (TypeError, ValueError):
-                        pass
+                    for field in fields_list:
+                        raw_val = t.get(field)
+                        try:
+                            field_totals[field] += float(raw_val)
+                            found_any = True
+                        except (TypeError, ValueError):
+                            pass
                 if not found_any:
                     continue
-                display_val = int(total) if total == int(total) else round(total, 1)
-                value_str = f": {display_val}{suffix}"
+                # Build value string with all fields
+                value_parts = []
+                for field in fields_list:
+                    display_val = int(field_totals[field]) if field_totals[field] == int(field_totals[field]) else round(field_totals[field], 1)
+                    field_suffix = get_field_suffix(field)
+                    value_parts.append(f"{display_val}{field_suffix}")
+                value_str = f": {' / '.join(value_parts)}"
             else:
                 # Find most recent matching treatment within max_age_hours
                 best_treatment = None
                 best_time = None
-                for t in treatments:
-                    if t.get('eventType', '').lower() != event_type_cfg.lower():
-                        continue
-                    t_time = _parse_treatment_time(t.get('created_at', ''))
+                for t, t_time in reversed(matching_treatments):
                     if t_time is None:
                         continue
                     age_hours = (now_utc - t_time).total_seconds() / 3600
@@ -624,25 +987,37 @@ class GlucoseWidget(QWidget):
                         best_treatment = t
                 if best_treatment is None:
                     continue
-                if show_field:
-                    val = best_treatment.get(show_field)
+                # Get all field values from the best treatment
+                value_parts = []
+                for field in fields_list:
+                    val = best_treatment.get(field)
                     if val is not None:
-                        value_str = f": {val}{suffix}"
+                        field_suffix = get_field_suffix(field)
+                        value_parts.append(f"{val}{field_suffix}")
+                if value_parts:
+                    value_str = f": {' / '.join(value_parts)}"
 
             pill_text = f"{label_text}{value_str}"
+            pill_texts.append(pill_text)
 
             pill_label = QLabel(pill_text)
-            pill_label.setFont(QFont("Segoe UI", self.config['age_font_size'] - 1, QFont.Weight.Normal))
+            is_bold = bool(pill_cfg.get('bold', False))
+            pill_weight = QFont.Weight.Bold if is_bold else QFont.Weight.Medium
+            pill_label.setFont(QFont("sans-serif", self.config['age_font_size'] - 1, pill_weight))
             pill_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+            max_pill_width = max(88, min(170, int((max(self.width(), 300) - 180) / 2)))
+            metrics = QFontMetrics(pill_label.font())
+            display_text = metrics.elidedText(pill_text, Qt.TextElideMode.ElideRight, max_pill_width)
+            pill_label.setText(display_text)
+            if display_text != pill_text:
+                pill_label.setToolTip(pill_text)
+            pill_label.setMaximumWidth(max_pill_width + 20)
+            pill_label.setMinimumHeight(24)
+
             pill_color = pill_cfg.get('color', '#80e8e0')
-            pill_bg = f"rgba(0, 0, 0, {pill_alpha})"
-            _pc = QColor(pill_color)
-            border_rgba = f"rgba({_pc.red()}, {_pc.green()}, {_pc.blue()}, 80)"
             pill_label.setStyleSheet(
-                f"color: {pill_color}; background-color: {pill_bg}; "
-                f"border-radius: 6px; padding: 2px 10px; margin: 0px; "
-                f"border: 1px solid {border_rgba};"
+                f"color: {pill_color}; background-color: transparent; padding: 0px 8px;"
             )
             pill_label.setGraphicsEffect(_shadow())
 
@@ -650,46 +1025,70 @@ class GlucoseWidget(QWidget):
             pills_added += 1
 
         if pills_added > 0:
-            self.header_pills_widget.show()
+            self._has_visible_pills = True
+            self._tray_pill_texts = pill_texts
+            self._apply_responsive_header_layout()
         else:
+            self._has_visible_pills = False
+            self._tray_pill_texts = []
             self.header_pills_widget.hide()
 
+        if hasattr(self, '_last_tray_glucose'):
+            self._refresh_tray_tooltip(
+                self._last_tray_glucose,
+                self._last_tray_trend,
+                self._last_tray_delta,
+                bool(getattr(self, '_tray_was_stale', False)),
+            )
+
+        self._last_header_pill_render_key = pill_render_key
+
     def _apply_header_label_styles(self, glucose_text_color=None):
-        """Style header labels with a dark pill background + drop-shadow for readability
-        at any transparency level."""
+        """Style the unified header bar and its child labels."""
         ui_colors = self.config['appearance']['colors']['ui']
         time_color = ui_colors['time_label']
         age_color = ui_colors['age_label']
         text_color = glucose_text_color or ui_colors['main_glucose_text']
-        pill_opacity_pct = self.config['appearance'].get('label_pill_opacity', 67)
+        appearance = self.config['appearance']
+        slider_pill_opacity = int(appearance.get('label_pill_opacity', 40))
+        pill_opacity_pct = slider_pill_opacity if appearance.get('transparency_enabled', True) else 100
         pill_alpha = round(pill_opacity_pct / 100 * 255)
-        pill = f"rgba(0, 0, 0, {pill_alpha})"
+        bg_hex = self.config['appearance'].get('background_color', '#1a1a1a')
+        _bg = QColor(bg_hex)
+        bar_bg = f"rgba({_bg.red()}, {_bg.green()}, {_bg.blue()}, {pill_alpha})"
 
         def _shadow():
             fx = QGraphicsDropShadowEffect()
-            fx.setBlurRadius(6)
+            fx.setBlurRadius(4)
             fx.setOffset(0, 0)
-            fx.setColor(QColor(0, 0, 0, 200))
+            fx.setColor(QColor(0, 0, 0, 160))
             return fx
 
+        # Single unified bar — #HeaderBar scopes the rule so children stay transparent
+        self.header_bar.setStyleSheet(
+            f"#HeaderBar {{ background-color: {bar_bg}; "
+            f"border-top-left-radius: 12px; border-top-right-radius: 12px; "
+            f"border: 1px solid rgba(96, 118, 150, 90); "
+            f"border-bottom: none; }}"
+        )
+
         self.time_label.setStyleSheet(
-            f"color: {time_color}; background-color: {pill}; "
-            f"border-radius: 6px; padding: 2px 8px; margin: 0px; "
-            f"border: 1px solid rgba(255, 255, 255, 18);"
+            f"color: {time_color}; background-color: transparent; padding: 0px 4px;"
         )
         self.time_label.setGraphicsEffect(_shadow())
 
         self.age_label.setStyleSheet(
-            f"color: {age_color}; background-color: {pill}; "
-            f"border-radius: 6px; padding: 2px 8px; margin: 0px; "
-            f"border: 1px solid rgba(255, 255, 255, 18);"
+            f"color: {age_color}; background-color: transparent; padding: 0px 4px;"
         )
         self.age_label.setGraphicsEffect(_shadow())
 
+        self.header_sep.setStyleSheet(
+            "background: rgba(142, 162, 196, 120); border: none; margin: 6px 6px;"
+        )
+
         self.label.setStyleSheet(
-            f"color: {text_color}; background-color: {pill}; "
-            f"border-radius: 6px; padding: 3px 12px; font-weight: bold; "
-            f"border: 1px solid rgba(255, 255, 255, 22);"
+            f"color: {text_color}; background-color: transparent; "
+            f"font-weight: bold; padding: 0px 4px;"
         )
         self.label.setGraphicsEffect(_shadow())
 
@@ -697,6 +1096,9 @@ class GlucoseWidget(QWidget):
         self.graph = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
         self._update_graph_background()
         self.graph.setMinimumHeight(150)
+        self.graph.setMouseTracking(True)
+        self.graph.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.graph.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         
         self.graph.setStyleSheet("""  
             QWidget {
@@ -745,8 +1147,23 @@ class GlucoseWidget(QWidget):
         self.graph.setLabel('bottom', '', color=label_color, size='10pt')
         
         self.graph.sigRangeChanged.connect(self.on_range_changed)
+        self._target_zone_items = []
         self.add_target_zones()
-        self.current_time_line = None
+        self.current_time_line = pg.InfiniteLine(
+            pos=datetime.now().timestamp(),
+            angle=90,
+            pen=pg.mkPen(color=self.config['appearance']['colors']['graph']['current_time_line'], width=1, cosmetic=True),
+            movable=False
+        )
+        self.graph.addItem(self.current_time_line)
+        self.current_time_line.setZValue(1000)
+
+        self._line_items = []
+        self._scatter_item = pg.ScatterPlotItem(symbol='o')
+        self._scatter_item.setZValue(100)
+        self.graph.addItem(self._scatter_item)
+
+        self._value_text_item = None
         self.treatment_items = []
 
         # Intercept mouse events on the graph so border-drag resize still works.
@@ -755,21 +1172,52 @@ class GlucoseWidget(QWidget):
         self.graph.installEventFilter(self)
         _vp = self.graph.viewport()
         if _vp is not None:
+            _vp.setMouseTracking(True)
             _vp.installEventFilter(self)
         
         graph_container = QWidget()
+        graph_container.setObjectName("GraphContainer")
         graph_layout = QVBoxLayout()
-        graph_layout.setContentsMargins(0, 2, 0, 0)
+        graph_layout.setContentsMargins(1, 0, 1, 1)
         graph_layout.setSpacing(0)
         graph_layout.addWidget(self.graph)
         graph_container.setLayout(graph_layout)
-        graph_container.setStyleSheet("background: transparent;")
+        graph_container.setStyleSheet(
+            "#GraphContainer { "
+            "border-left: 1px solid rgba(255, 255, 255, 18); "
+            "border-right: 1px solid rgba(255, 255, 255, 18); "
+            "border-bottom: 1px solid rgba(255, 255, 255, 18); "
+            "border-bottom-left-radius: 10px; "
+            "border-bottom-right-radius: 10px; "
+            "background: transparent; }"
+        )
         self.main_layout.addWidget(graph_container, 1)
 
     def add_target_zones(self):
         """Add colored zones for low, target, and high glucose ranges"""
+        from PyQt6.QtGui import QColor
+
+        if hasattr(self, '_target_zone_items'):
+            for item in self._target_zone_items:
+                try:
+                    self.graph.removeItem(item)
+                except Exception:
+                    pass
+            self._target_zone_items = []
+
         target_low = self.config['target_low']
         target_high = self.config['target_high']
+        target_fill = self.config['appearance']['colors']['target_zones'].get('target_fill', '#00d4aa')
+        target_fill_q = QColor(target_fill)
+
+        target_zone = pg.LinearRegionItem(
+            values=[target_low, target_high],
+            brush=pg.mkBrush(target_fill_q.red(), target_fill_q.green(), target_fill_q.blue(), self.config['appearance']['target_zone_opacity']),
+            pen=pg.mkPen(None),
+            movable=False
+        )
+        self.graph.addItem(target_zone)
+        self._target_zone_items.append(target_zone)
         
         low_zone = pg.LinearRegionItem(
             values=[40, target_low], 
@@ -778,6 +1226,7 @@ class GlucoseWidget(QWidget):
             movable=False
         )
         self.graph.addItem(low_zone)
+        self._target_zone_items.append(low_zone)
         
         high_zone = pg.LinearRegionItem(
             values=[target_high, 300], 
@@ -786,18 +1235,20 @@ class GlucoseWidget(QWidget):
             movable=False
         )
         self.graph.addItem(high_zone)
+        self._target_zone_items.append(high_zone)
         
         low_line_color = self.config['appearance']['colors']['target_zones']['low_line']
         high_line_color = self.config['appearance']['colors']['target_zones']['high_line']
-        
-        from PyQt6.QtGui import QColor
+
         low_color = QColor(low_line_color)
         low_color.setAlpha(120)
         high_color = QColor(high_line_color)
         high_color.setAlpha(120)
         
-        self.graph.addLine(y=target_low, pen=pg.mkPen(low_color, width=2, style=Qt.PenStyle.DashLine))
-        self.graph.addLine(y=target_high, pen=pg.mkPen(high_color, width=2, style=Qt.PenStyle.DashLine))
+        low_line = self.graph.addLine(y=target_low, pen=pg.mkPen(low_color, width=2, style=Qt.PenStyle.DashLine))
+        high_line = self.graph.addLine(y=target_high, pen=pg.mkPen(high_color, width=2, style=Qt.PenStyle.DashLine))
+        self._target_zone_items.append(low_line)
+        self._target_zone_items.append(high_line)
 
     # ===== Dragging and Context Menu =====
     def eventFilter(self, obj, event):
@@ -815,6 +1266,9 @@ class GlucoseWidget(QWidget):
             edge = self.get_resize_edge(local_pos)
 
             if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.RightButton:
+                    self.show_context_menu(event.globalPosition().toPoint())
+                    return True
                 if edge and event.button() == Qt.MouseButton.LeftButton:
                     self.resize_edge = edge
                     self.resize_start_pos = event.globalPosition().toPoint()
@@ -826,16 +1280,13 @@ class GlucoseWidget(QWidget):
                     self.handle_resize(event.globalPosition().toPoint())
                     return True
                 elif not (event.buttons() & Qt.MouseButton.LeftButton):
-                    if edge:
-                        self.setCursor(self.get_resize_cursor(edge))
-                    else:
-                        self.setCursor(Qt.CursorShape.ArrowCursor)
+                    self._update_hover_cursor(local_pos)
             elif event.type() == QEvent.Type.MouseButtonRelease:
                 if self.resize_edge and event.button() == Qt.MouseButton.LeftButton:
                     self.resize_edge = None
                     self.resize_start_pos = None
                     self.resize_start_geometry = None
-                    self.setCursor(Qt.CursorShape.ArrowCursor)
+                    self._update_hover_cursor(local_pos)
                     self.position_save_timer.start()
                     return True
         return super().eventFilter(obj, event)
@@ -862,6 +1313,16 @@ class GlucoseWidget(QWidget):
         auto_resize_action = QAction("Enable Auto-resize" if self.user_resized else "Disable Auto-resize", self)
         auto_resize_action.triggered.connect(self.toggle_auto_resize)
         menu.addAction(auto_resize_action)
+
+        is_transparency_enabled = bool(
+            self.config.get('appearance', {}).get('transparency_enabled', True)
+        )
+        graph_transparency_action = QAction(
+            "Disable Transparency" if is_transparency_enabled else "Enable Transparency",
+            self,
+        )
+        graph_transparency_action.triggered.connect(self.toggle_graph_transparency)
+        menu.addAction(graph_transparency_action)
         
         settings_action = QAction("Settings...", self)
         settings_action.triggered.connect(self.show_settings_dialog)
@@ -894,11 +1355,20 @@ class GlucoseWidget(QWidget):
         
         if hasattr(self, 'position_save_timer'):
             self.position_save_timer.start()
+
+    def toggle_graph_transparency(self):
+        """Enable/disable transparency effect for both graph and header from the opacity sliders."""
+        appearance = dict(self.config.get('appearance', {}))
+        appearance['transparency_enabled'] = not bool(
+            appearance.get('transparency_enabled', True)
+        )
+
+        self.apply_settings({"appearance": appearance})
     
     def show_settings_dialog(self):
         dialog = SettingsDialog(self, self.config)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.update_glucose()
+            self.update_glucose(fetch_remote=True)
 
     def show_connection_dialog(self):
         """Re-run the setup wizard to change Nightscout URL / API secret."""
@@ -911,7 +1381,7 @@ class GlucoseWidget(QWidget):
             self.timezone_offset = self.config['timezone_offset']
             self.update_glucose()
     
-    def apply_settings(self, new_config):
+    def apply_settings(self, new_config, fetch_remote=False):
         # Update connection credentials if they changed
         if new_config.get('nightscout_url'):
             if new_config['nightscout_url'] != self.nightscout_url:
@@ -951,6 +1421,7 @@ class GlucoseWidget(QWidget):
                 "time_font_size": self.config.get('time_font_size', 12),
                 "age_font_size": self.config.get('age_font_size', 10),
                 "show_delta": self.config.get('show_delta', True),
+                "show_float_glucose": self.config.get('show_float_glucose', True),
                 "adaptive_dot_size": self.config.get('adaptive_dot_size', False),
                 "data_point_size": self.config.get('data_point_size', 6),
                 "gradient_interpolation": self.config.get('gradient_interpolation', True),
@@ -966,15 +1437,16 @@ class GlucoseWidget(QWidget):
             log.error("Error saving config: %s", e)
         
         self._apply_header_label_styles()
-        
-        self.label.setFont(QFont("Segoe UI", self.config['glucose_font_size'], QFont.Weight.Bold))
-        self.time_label.setFont(QFont("Segoe UI", self.config['time_font_size'], QFont.Weight.Medium))
-        self.age_label.setFont(QFont("Segoe UI", self.config['age_font_size'] - 1, QFont.Weight.Normal))
+        self._apply_close_button_style(False)
+        self._apply_dynamic_header_fonts()
 
         self._update_graph_background()
+        self._apply_header_background()
+        self.add_target_zones()
         self._apply_widget_background()
+        self._last_treatment_render_key = None
 
-        self.update_glucose()
+        self.update_glucose(fetch_remote=fetch_remote)
 
     def mouseMoveEvent(self, event):
         if self.resize_edge and event.buttons() & Qt.MouseButton.LeftButton:
@@ -991,11 +1463,7 @@ class GlucoseWidget(QWidget):
             
             self.position_save_timer.start()
         else:
-            edge = self.get_resize_edge(event.position().toPoint())
-            if edge:
-                self.setCursor(self.get_resize_cursor(edge))
-            else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+            self._update_hover_cursor(event.position().toPoint())
                 
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
@@ -1004,7 +1472,7 @@ class GlucoseWidget(QWidget):
             self.resize_start_pos = None
             self.resize_start_geometry = None
             self.old_pos = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self._update_hover_cursor(event.position().toPoint())
             
             if hasattr(self, 'position_save_timer'):
                 self.position_save_timer.start()
@@ -1017,7 +1485,7 @@ class GlucoseWidget(QWidget):
             
     def get_resize_edge(self, pos):
         """Determine which edge of the window is near the mouse position"""
-        edge_margin = 12  # pixels from edge to trigger resize
+        edge_margin = self.resize_edge_margin
         rect = self.rect()
         
         if (pos.x() <= edge_margin and pos.y() <= edge_margin):
@@ -1091,6 +1559,7 @@ class GlucoseWidget(QWidget):
                 self._show_hide_action.setText("Show NSOverlay")
             event.ignore()
         else:
+            self._stop_fetch_thread()
             event.accept()
 
     # ===== System Tray =====
@@ -1154,7 +1623,7 @@ class GlucoseWidget(QWidget):
         # Glucose text — pick dark or light colour based on background luminance
         text = str(glucose)
         font_size = 32 if len(text) <= 2 else 26
-        font = QFont("Arial", font_size, QFont.Weight.Bold)
+        font = QFont("sans-serif", font_size, QFont.Weight.Bold)
         painter.setFont(font)
         luma = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
         text_color = QColor("#000000") if luma > 128 else QColor("#ffffff")
@@ -1163,6 +1632,38 @@ class GlucoseWidget(QWidget):
 
         painter.end()
         return QIcon(pixmap)
+
+    def _normalize_qt_color_key(self, color):
+        qcolor = QColor(color)
+        if qcolor.isValid():
+            return qcolor.name(QColor.NameFormat.HexArgb)
+        return str(color)
+
+    def _get_cached_brush(self, color):
+        key = self._normalize_qt_color_key(color)
+        brush = self._brush_cache.get(key)
+        if brush is None:
+            brush = pg.mkBrush(QColor(color))
+            self._brush_cache[key] = brush
+        return brush
+
+    def _get_cached_pen(self, color, width=1, style=Qt.PenStyle.SolidLine, cosmetic=False, round_join=False):
+        style_key = getattr(style, 'value', style)
+        key = (
+            self._normalize_qt_color_key(color),
+            float(width),
+            style_key,
+            bool(cosmetic),
+            bool(round_join),
+        )
+        pen = self._pen_cache.get(key)
+        if pen is None:
+            pen = pg.mkPen(color=QColor(color), width=width, style=style, cosmetic=cosmetic)
+            if round_join:
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            self._pen_cache[key] = pen
+        return pen
 
     def _update_tray_icon(self, glucose, trend_arrow, delta_text):
         """Update tray icon colour and tooltip to reflect the latest glucose reading."""
@@ -1188,13 +1689,25 @@ class GlucoseWidget(QWidget):
         else:
             bg_hex = glucose_colors['high']
 
-        self._tray.setIcon(self._make_tray_icon(glucose, bg_hex))
+        icon_key = (str(glucose), bg_hex)
+        if icon_key != self._last_tray_icon_key or self._last_tray_icon is None:
+            self._last_tray_icon = self._make_tray_icon(glucose, bg_hex)
+            self._last_tray_icon_key = icon_key
+
+        self._tray.setIcon(self._last_tray_icon)
 
         # Cache so update_time_display can re-render on stale transition
         self._last_tray_glucose = glucose
         self._last_tray_trend = trend_arrow
         self._last_tray_delta = delta_text
         self._tray_was_stale = is_stale
+
+        self._refresh_tray_tooltip(glucose, trend_arrow, delta_text, is_stale)
+
+    def _refresh_tray_tooltip(self, glucose, trend_arrow, delta_text, is_stale):
+        """Refresh tray tooltip text using latest glucose, age and header pill values."""
+        if not hasattr(self, '_tray'):
+            return
 
         age_text = self.age_label.text()
         tooltip = f"{glucose} {trend_arrow}"
@@ -1203,7 +1716,103 @@ class GlucoseWidget(QWidget):
         if age_text:
             stale_prefix = "⚠ STALE — " if is_stale else ""
             tooltip += f"\n{stale_prefix}{age_text}"
+        if self._tray_pill_texts:
+            tooltip += "\n" + "\n".join(self._tray_pill_texts)
         self._tray.setToolTip(f"NSOverlay\n{tooltip}")
+
+    def _build_header_pill_render_key(self, treatments):
+        pill_configs = self.config.get('header_pills', [])
+        if not pill_configs:
+            return ('no-pills', self.width(), self.timezone_offset)
+
+        def _event_keys_for_pill(pill_cfg):
+            event_types = pill_cfg.get('event_types')
+            keys = []
+
+            if isinstance(event_types, list):
+                for event_type in event_types:
+                    if isinstance(event_type, str):
+                        normalized = event_type.strip().lower()
+                        if normalized and normalized not in keys:
+                            keys.append(normalized)
+
+            if not keys:
+                event_type_cfg = pill_cfg.get('event_type', '')
+                if isinstance(event_type_cfg, str):
+                    separators = ['|', ',']
+                    expanded = [event_type_cfg]
+                    for sep in separators:
+                        if any(sep in part for part in expanded):
+                            next_parts = []
+                            for part in expanded:
+                                next_parts.extend(part.split(sep))
+                            expanded = next_parts
+                    for raw_key in expanded:
+                        normalized = raw_key.strip().lower()
+                        if normalized and normalized not in keys:
+                            keys.append(normalized)
+
+            return tuple(keys)
+
+        normalized_pills = []
+        relevant_event_types = set()
+        for pill_cfg in pill_configs:
+            if not bool(pill_cfg.get('enabled', True)):
+                continue
+
+            event_keys = _event_keys_for_pill(pill_cfg)
+            if not event_keys:
+                continue
+
+            show_field = pill_cfg.get('show_field')
+            show_fields = pill_cfg.get('show_fields', [])
+            if show_fields and isinstance(show_fields, list):
+                fields_list = tuple(str(field) for field in show_fields)
+            elif show_field:
+                if isinstance(show_field, list):
+                    fields_list = tuple(str(field) for field in show_field)
+                else:
+                    fields_list = (str(show_field),)
+            else:
+                fields_list = ()
+
+            suffix_map = pill_cfg.get('suffix_map', {})
+            if isinstance(suffix_map, dict):
+                suffix_map_items = tuple(sorted((str(k), str(v)) for k, v in suffix_map.items()))
+            else:
+                suffix_map_items = ()
+
+            normalized_pills.append((
+                event_keys,
+                fields_list,
+                bool(pill_cfg.get('sum_daily', False)),
+                float(pill_cfg.get('max_age_hours', 24)),
+                str(pill_cfg.get('label', '')),
+                str(pill_cfg.get('suffix', '')),
+                suffix_map_items,
+                bool(pill_cfg.get('bold', False)),
+            ))
+            relevant_event_types.update(event_keys)
+
+        treatment_signature = []
+        if relevant_event_types:
+            for treatment in treatments:
+                if not isinstance(treatment, dict):
+                    continue
+                event_type = treatment.get('eventType', '').lower()
+                if event_type in relevant_event_types:
+                    treatment_signature.append((
+                        treatment.get('_id'),
+                        treatment.get('created_at'),
+                        event_type,
+                    ))
+
+        return (
+            self.width(),
+            self.timezone_offset,
+            tuple(normalized_pills),
+            tuple(treatment_signature),
+        )
 
     def _toggle_visibility(self):
         """Show or hide the main widget and update the tray menu label."""
@@ -1229,6 +1838,7 @@ class GlucoseWidget(QWidget):
             self._tray.hide()
         self.save_position_and_size()
         self.save_zoom_state()
+        self._stop_fetch_thread()
         QApplication.quit()
 
     # ===== Position & Size Memory =====
@@ -1365,12 +1975,12 @@ class GlucoseWidget(QWidget):
             return
             
         try:
-            font = QFont("Segoe UI", self.config['glucose_font_size'], QFont.Weight.Bold)
+            font = QFont("sans-serif", self.config['glucose_font_size'], QFont.Weight.Bold)
             font_metrics = QFontMetrics(font)
             text_width = font_metrics.horizontalAdvance(glucose_text)
             padding = 40
             
-            time_font = QFont("Segoe UI", self.config['time_font_size'], QFont.Weight.Medium)
+            time_font = QFont("sans-serif", self.config['time_font_size'], QFont.Weight.Medium)
             time_metrics = QFontMetrics(time_font)
             time_width = time_metrics.horizontalAdvance("00:00 00:00")
             
@@ -1545,82 +2155,158 @@ class GlucoseWidget(QWidget):
         for item in self.treatment_items:
             self.graph.removeItem(item)
         self.treatment_items = []
-    
-    def fetch_all_treatments(self):
-        """Fetch treatment data from Nightscout with minimal network traffic.
 
-        First call: fetches the full ``treatments_to_fetch`` window.
-        Subsequent calls: fetches 1 treatment to probe for new data.
-          - If the latest ID is already cached → skip (no second request).
-          - If a new ID is found → fetch 5 to catch up.
-        Falls back to the in-memory cache on network errors.
-        """
-        try:
-            headers = {"api-secret": self.api_secret}
-            treatments_to_fetch = self.config.get('treatments_to_fetch', 50)
+    def _ensure_line_item(self, index):
+        while len(self._line_items) <= index:
+            curve = pg.PlotCurveItem()
+            curve.setZValue(20)
+            self.graph.addItem(curve)
+            self._line_items.append(curve)
+        return self._line_items[index]
 
-            if not self._treatments_cache:
-                # First load — fetch the full history window
-                url = f"{self.nightscout_url}/api/v1/treatments.json?count={treatments_to_fetch}"
-                log.debug("[TREATMENTS] First load: %s", url)
-                response = requests.get(url, headers=headers, timeout=5)
-                log.debug("[TREATMENTS] HTTP %s", response.status_code)
-                response.raise_for_status()
-                new_treatments = response.json()
-                log.debug("[TREATMENTS] Received %s treatments", len(new_treatments) if isinstance(new_treatments, list) else '?')
-            else:
-                # Probe: fetch only the single latest treatment
-                probe_url = f"{self.nightscout_url}/api/v1/treatments.json?count=1"
-                log.debug("[TREATMENTS] Probing: %s  (cache has %d items, last_id=%s)", probe_url, len(self._treatments_cache), self._treatments_cache[-1].get('_id'))
-                probe_resp = requests.get(probe_url, headers=headers, timeout=5)
-                log.debug("[TREATMENTS] Probe HTTP %s", probe_resp.status_code)
-                probe_resp.raise_for_status()
-                probe = probe_resp.json()
+    def _apply_line_segments(self, segments, width, style):
+        for idx, (xs, ys, color) in enumerate(segments):
+            curve = self._ensure_line_item(idx)
+            curve.setData(xs, ys, antialias=True)
+            curve.setPen(self._get_cached_pen(color, width=width, style=style, round_join=True))
 
-                if not isinstance(probe, list):
-                    raise ValueError(f"Unexpected API response type: {type(probe).__name__}")
+        for idx in range(len(segments), len(self._line_items)):
+            self._line_items[idx].setData([], [])
 
-                probe_id = probe[0].get("_id") if probe else None
-                cached_id = self._treatments_cache[-1].get("_id")
-                log.debug("[TREATMENTS] Probe latest _id=%s  cached latest _id=%s", probe_id, cached_id)
+    def _build_render_key(self):
+        latest_entry = self._entries_cache[-1] if self._entries_cache else {}
+        latest_treatment = self._treatments_cache[-1] if self._treatments_cache else {}
+        appearance = self.config.get('appearance', {})
+        appearance_graph = appearance.get('colors', {}).get('graph', {})
 
-                # No new treatment — return cache as-is
-                if not probe or probe_id == cached_id:
-                    log.debug("[TREATMENTS] No new treatment — returning cache")
-                    return list(self._treatments_cache)
+        return (
+            latest_entry.get('_id'),
+            latest_entry.get('date'),
+            latest_entry.get('sgv'),
+            len(self._entries_cache),
+            latest_treatment.get('_id'),
+            len(self._treatments_cache),
+            self.config.get('timezone_offset'),
+            self.config.get('time_window_hours'),
+            self.config.get('show_treatments', True),
+            self.config.get('show_float_glucose', True),
+            self.config.get('show_delta', True),
+            self.config.get('gradient_interpolation', True),
+            self.config.get('target_low'),
+            self.config.get('target_high'),
+            self.config.get('data_point_size'),
+            self.config.get('adaptive_dot_size', False),
+            appearance.get('graph_line_style', 'solid'),
+            appearance.get('graph_line_width', 2),
+            appearance.get('graph_line_smooth', False),
+            appearance_graph.get('main_line', '#a0a0a0'),
+            appearance.get('marker_outline_color', '#000000'),
+            appearance.get('marker_outline_width', 1.5),
+            str(self.config.get('header_pills', [])),
+        )
 
-                # New treatment detected — fetch a small batch to catch up
-                url = f"{self.nightscout_url}/api/v1/treatments.json?count=5"
-                log.debug("[TREATMENTS] New treatment detected, fetching batch: %s", url)
-                response = requests.get(url, headers=headers, timeout=5)
-                log.debug("[TREATMENTS] Batch HTTP %s", response.status_code)
-                response.raise_for_status()
-                new_treatments = response.json()
-                log.debug("[TREATMENTS] Batch received %s treatments", len(new_treatments) if isinstance(new_treatments, list) else '?')
+    def _build_treatment_render_key(self, treatments, y_min, y_max):
+        if not treatments:
+            return (None, round(y_min, 2), round(y_max, 2), self.timezone_offset)
 
-            if not isinstance(new_treatments, list):
-                raise ValueError(f"Unexpected API response type: {type(new_treatments).__name__}")
+        relevant = []
+        graph_event_types = {
+            'correction bolus', 'meal bolus', 'bolus',
+            'carb correction', 'carbs', 'exercise', 'basal injection'
+        }
+        for treatment in treatments:
+            event_type = treatment.get('eventType', '').lower()
+            if event_type in graph_event_types:
+                relevant.append((
+                    treatment.get('_id'),
+                    treatment.get('created_at', treatment.get('timestamp')),
+                    event_type,
+                    treatment.get('insulin'),
+                    treatment.get('carbs'),
+                    treatment.get('duration'),
+                    treatment.get('notes'),
+                ))
 
-            if new_treatments:
-                existing_ids = {t.get("_id") for t in self._treatments_cache}
-                added = 0
-                for t in new_treatments:
-                    if isinstance(t, dict) and t.get("_id") not in existing_ids:
-                        self._treatments_cache.append(t)
-                        existing_ids.add(t.get("_id"))
-                        added += 1
-                # Sort oldest-first by created_at and trim to the configured window
-                self._treatments_cache.sort(key=lambda t: t.get("created_at", ""))
-                if len(self._treatments_cache) > treatments_to_fetch:
-                    self._treatments_cache = self._treatments_cache[-treatments_to_fetch:]
-                log.debug("[TREATMENTS] Added %d new items. Cache size: %d", added, len(self._treatments_cache))
+        return (
+            tuple(relevant),
+            round(y_min, 2),
+            round(y_max, 2),
+            self.timezone_offset,
+        )
 
-            return list(self._treatments_cache)
+    def _start_remote_fetch(self):
+        """Fetch entries/treatments in a worker thread to keep UI responsive."""
+        if 'entries_to_fetch' in self.config:
+            entries_to_fetch = int(self.config['entries_to_fetch'])
+        else:
+            time_window_hours = self.config.get('time_window_hours', 1)
+            entries_to_fetch = max(int(90 * time_window_hours), 30)
 
-        except Exception as e:
-            log.error("[TREATMENTS] Error fetching treatments: %s", e)
-            # Return whatever we have cached so the UI stays populated
-            return list(self._treatments_cache)
+        payload = {
+            "nightscout_url": self.nightscout_url,
+            "api_secret": self.api_secret,
+            "fetch_remote": True,
+            "entries_to_fetch": entries_to_fetch,
+            "entries_cache": list(self._entries_cache),
+            "fetch_treatments": bool(self.config.get('show_treatments', True) or self.config.get('header_pills', [])),
+            "treatments_to_fetch": int(self.config.get('treatments_to_fetch', 50)),
+            "treatments_cache": list(self._treatments_cache),
+        }
+        if self._fetch_thread is not None:
+            self._fetch_thread.submit(payload)
+
+    def _merge_entries_cache(self, incoming_entries):
+        entries_to_fetch = int(self.config.get('entries_to_fetch', 90))
+        merged = list(self._entries_cache)
+        existing_ids = {e.get('_id') for e in merged if isinstance(e, dict)}
+
+        for entry in incoming_entries:
+            if isinstance(entry, dict) and entry.get('_id') not in existing_ids:
+                merged.append(entry)
+                existing_ids.add(entry.get('_id'))
+
+        merged.sort(key=lambda e: e.get('date', 0))
+        if len(merged) > entries_to_fetch:
+            merged = merged[-entries_to_fetch:]
+        return merged
+
+    def _merge_treatments_cache(self, incoming_treatments):
+        treatments_to_fetch = int(self.config.get('treatments_to_fetch', 50))
+        merged = list(self._treatments_cache)
+        existing_ids = {t.get('_id') for t in merged if isinstance(t, dict)}
+
+        for treatment in incoming_treatments:
+            if isinstance(treatment, dict) and treatment.get('_id') not in existing_ids:
+                merged.append(treatment)
+                existing_ids.add(treatment.get('_id'))
+
+        merged.sort(key=lambda t: t.get('created_at', ''))
+        if len(merged) > treatments_to_fetch:
+            merged = merged[-treatments_to_fetch:]
+        return merged
+
+    def _on_remote_fetch_result(self, data):
+        incoming_entries = list(data.get("entries_cache", []))
+        incoming_treatments = list(data.get("treatments_cache", []))
+
+        self._entries_cache = self._merge_entries_cache(incoming_entries)
+        self._treatments_cache = self._merge_treatments_cache(incoming_treatments)
+        self.update_glucose(fetch_remote=False)
+
+    def _on_remote_fetch_error(self, error_text):
+        log.warning("Background fetch error: %s", error_text)
+        if hasattr(self, '_tray'):
+            self._tray.setToolTip(f"NSOverlay\n⚠ Background fetch failed: {error_text}")
+        if not self._entries_cache:
+            self.age_label.setText("⚠ fetch error")
+
+    def _stop_fetch_thread(self):
+        if self._fetch_thread is None:
+            return
+        if self._fetch_thread.isRunning():
+            self._fetch_thread.stop()
+            self._fetch_thread.wait(2000)
+        self._fetch_thread = None
     
     def add_treatments_to_graph(self, treatments):
         """Add treatment markers to the graph"""
@@ -1648,10 +2334,9 @@ class GlucoseWidget(QWidget):
                 if not created_at:
                     continue
                     
-                if 'T' in created_at and 'Z' in created_at:
-                    timestamp = datetime.strptime(created_at.split('.')[0] + 'Z', "%Y-%m-%dT%H:%M:%SZ")
-                else:
-                    timestamp = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+                timestamp = self._parse_ns_datetime(created_at)
+                if timestamp is None:
+                    continue
                 
                 local_timestamp = timestamp + timedelta(hours=self.timezone_offset)
                 unix_timestamp = local_timestamp.timestamp()
@@ -1683,12 +2368,19 @@ class GlucoseWidget(QWidget):
                     style = treatment_styles['insulin']
                     text_content = f"{style['symbol']}{insulin_amount}U"
                     
+                    # Adjust position based on whether there are carbs
+                    if carb_amount and carb_amount > 0:
+                        # If carbs exist, move bolus up to make room for carbs below
+                        bolus_y = treatment_y_position - 8
+                    else:
+                        bolus_y = treatment_y_position
+                    
                     outline_item = pg.TextItem(
                         text_content,
                         color='black',
                         anchor=(0.5, 1.0)
                     )
-                    outline_item.setPos(unix_timestamp + 1, treatment_y_position - 1)
+                    outline_item.setPos(unix_timestamp + 1, bolus_y - 1)
                     self.graph.addItem(outline_item)
                     self.treatment_items.append(outline_item)
                     
@@ -1697,11 +2389,36 @@ class GlucoseWidget(QWidget):
                         color=style['color'],
                         anchor=(0.5, 1.0)
                     )
-                    text_item.setPos(unix_timestamp, treatment_y_position)
+                    text_item.setPos(unix_timestamp, bolus_y)
                     self.graph.addItem(text_item)
                     self.treatment_items.append(text_item)
+                    
+                    # Show carbs together with bolus if present
+                    if carb_amount and carb_amount > 0:
+                        carb_style = treatment_styles['carb']
+                        carb_content = f"{carb_style['symbol']}{int(carb_amount)}g"
+                        
+                        carb_y = treatment_y_position + 8
+                        carb_outline = pg.TextItem(
+                            carb_content,
+                            color='black',
+                            anchor=(0.5, 0.0)
+                        )
+                        carb_outline.setPos(unix_timestamp + 1, carb_y + 1)
+                        self.graph.addItem(carb_outline)
+                        self.treatment_items.append(carb_outline)
+                        
+                        carb_text = pg.TextItem(
+                            carb_content,
+                            color=carb_style['color'],
+                            anchor=(0.5, 0.0)
+                        )
+                        carb_text.setPos(unix_timestamp, carb_y)
+                        self.graph.addItem(carb_text)
+                        self.treatment_items.append(carb_text)
                 
-                if carb_amount and carb_amount > 0:
+                elif carb_amount and carb_amount > 0:
+                    # Show carbs alone if there's no bolus
                     style = treatment_styles['carb']
                     text_content = f"{style['symbol']}{int(carb_amount)}g"
                     
@@ -1710,7 +2427,7 @@ class GlucoseWidget(QWidget):
                         color='black',
                         anchor=(0.5, 0.0)
                     )
-                    outline_item.setPos(unix_timestamp + 1, treatment_y_position + 14)
+                    outline_item.setPos(unix_timestamp + 1, treatment_y_position + 1)
                     self.graph.addItem(outline_item)
                     self.treatment_items.append(outline_item)
                     
@@ -1719,7 +2436,7 @@ class GlucoseWidget(QWidget):
                         color=style['color'],
                         anchor=(0.5, 0.0)
                     )
-                    text_item.setPos(unix_timestamp, treatment_y_position + 15)
+                    text_item.setPos(unix_timestamp, treatment_y_position)
                     self.graph.addItem(text_item)
                     self.treatment_items.append(text_item)
                 
@@ -1791,62 +2508,29 @@ class GlucoseWidget(QWidget):
                 log.error("Error adding treatment marker: %s", e)
                 continue
     
-    def update_glucose(self):
+    def update_glucose(self, fetch_remote=True):
         try:
-            headers = {"api-secret": self.api_secret}
-            
-            if 'entries_to_fetch' in self.config:
-                entries_to_fetch = int(self.config['entries_to_fetch'])
-            else:
-                time_window_hours = self.config.get('time_window_hours', 1)
-                entries_to_fetch = max(int(90 * time_window_hours), 30)
-            
-            entries_to_fetch = min(entries_to_fetch, 288)
+            if fetch_remote:
+                self._start_remote_fetch()
 
-            # First load: fetch the full history window.
-            # Subsequent polls: use the _id of the newest cached entry as a cursor so
-            # the server returns ONLY documents created after it — no duplication, no
-            # fixed count guess needed.
-            last_date_ms = self._entries_cache[-1].get("date") if self._entries_cache else None
-            if last_date_ms:
-                url = (f"{self.nightscout_url}/api/v1/entries.json"
-                       f"?find[date][$gt]={last_date_ms}&count=5")
-            else:
-                url = (f"{self.nightscout_url}/api/v1/entries.json"
-                       f"?count={entries_to_fetch}")
-
-            log.debug("[ENTRIES] Requesting: %s", url)
-            log.debug("[ENTRIES] Cache before fetch: %d entries, last_date_ms=%s", len(self._entries_cache), last_date_ms)
-
-            response = requests.get(url, headers=headers, timeout=5)
-
-            log.debug("[ENTRIES] HTTP %s", response.status_code)
-            response.raise_for_status()
-            new_entries = response.json()
-            if not isinstance(new_entries, list):
-                raise ValueError(f"Unexpected API response type: {type(new_entries).__name__}")
-
-            log.debug("[ENTRIES] Received %d new entries from server", len(new_entries))
-
-            # Append truly-new entries (date cursor prevents dupes, but guard anyway)
-            if new_entries:
-                existing_keys = {e.get("_id") for e in self._entries_cache}
-                added = 0
-                for entry in new_entries:
-                    if isinstance(entry, dict) and entry.get("_id") not in existing_keys:
-                        self._entries_cache.append(entry)
-                        existing_keys.add(entry.get("_id"))
-                        added += 1
-                self._entries_cache.sort(key=lambda e: e.get("date", 0))
-                if len(self._entries_cache) > entries_to_fetch:
-                    self._entries_cache = self._entries_cache[-entries_to_fetch:]
-                log.debug("[ENTRIES] Added %d truly-new entries. Cache size: %d", added, len(self._entries_cache))
-            else:
-                log.debug("[ENTRIES] No new entries returned — cache unchanged (%d entries)", len(self._entries_cache))
+            if not self._entries_cache:
+                if fetch_remote:
+                    self.label.setText("Loading...")
+                    self.time_label.setText(datetime.now().strftime("%H:%M"))
+                    self.age_label.setText("Fetching data...")
+                    return
+                raise ValueError("No cached glucose entries available")
 
             if self._entries_cache:
                 latest = self._entries_cache[-1]
                 log.debug("[ENTRIES] Latest cached: sgv=%s, dateString=%s, _id=%s", latest.get('sgv'), latest.get('dateString'), latest.get('_id'))
+
+            render_key = self._build_render_key()
+            if not fetch_remote and render_key == self._last_render_key:
+                now = datetime.now().timestamp()
+                self.current_time_line.setPos(now)
+                self.current_max_time = now
+                return
 
             entries = list(self._entries_cache)
 
@@ -1869,18 +2553,7 @@ class GlucoseWidget(QWidget):
                     continue
                 if not (20 <= sgv <= 600):
                     continue
-                # Parse timestamp — handle formats with and without milliseconds
-                timestamp = None
-                for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
-                    try:
-                        timestamp = datetime.strptime(date_str[:26].rstrip('Z') + 'Z', fmt)
-                        break
-                    except ValueError:
-                        try:
-                            timestamp = datetime.strptime(date_str[:19], fmt[:19])
-                            break
-                        except ValueError:
-                            continue
+                timestamp = self._parse_ns_datetime(date_str)
                 if timestamp is None:
                     log.warning("Could not parse dateString %r, skipping entry", date_str)
                     continue
@@ -1912,65 +2585,147 @@ class GlucoseWidget(QWidget):
                 for sgv in glucose_values
             ]
 
-            self.graph.clear()
-            self.treatment_items = []
-            self.add_target_zones()
-            
             current_now = datetime.now().timestamp()
-            time_line_color = self.config['appearance']['colors']['graph']['current_time_line']
-            if not hasattr(self, 'current_time_line') or self.current_time_line is None:
-                self.current_time_line = pg.InfiniteLine(
-                    pos=current_now,
-                    angle=90,
-                    pen=pg.mkPen(color=time_line_color, width=1, cosmetic=True),
-                    movable=False
-                )
-            else:
-                self.current_time_line.setPos(current_now)
-            
-            self.graph.addItem(self.current_time_line)
-            self.current_time_line.setZValue(1000)
+            self.current_time_line.setPos(current_now)
+
+            if self._value_text_item is not None:
+                try:
+                    self.graph.removeItem(self._value_text_item)
+                except Exception:
+                    pass
+                self._value_text_item = None
             
             glucose_colors = self.config['appearance']['colors']['glucose_ranges']
             target_low = self.config['target_low']
             target_high = self.config['target_high']
             
-            for i in range(len(timestamps) - 1):
-                x1, y1 = timestamps[i], glucose_values[i]
-                x2, y2 = timestamps[i + 1], glucose_values[i + 1]
-                
-                avg_glucose = (y1 + y2) / 2
-                segment_color = self.get_glucose_color_with_interpolation(
-                    avg_glucose, target_low, target_high, glucose_colors,
-                    sgv_max=sgv_max, sgv_min=sgv_min
-                )
-                
-                _line_style_map = {
-                    'solid': Qt.PenStyle.SolidLine,
-                    'dash': Qt.PenStyle.DashLine,
-                    'dot': Qt.PenStyle.DotLine,
-                    'dashdot': Qt.PenStyle.DashDotLine,
-                }
-                _style_key = self.config['appearance'].get('graph_line_style', 'solid')
-                _pen_style = _line_style_map.get(_style_key, Qt.PenStyle.SolidLine)
-                self.graph.plot(
-                    [x1, x2], [y1, y2],
-                    pen=pg.mkPen(color=segment_color, width=self.config['appearance']['graph_line_width'], style=_pen_style),
-                    antialias=True
-                )
+            _line_style_map = {
+                'solid': Qt.PenStyle.SolidLine,
+                'dash': Qt.PenStyle.DashLine,
+                'dot': Qt.PenStyle.DotLine,
+                'dashdot': Qt.PenStyle.DashDotLine,
+            }
+            _style_key = self.config['appearance'].get('graph_line_style', 'solid')
+            _pen_style = _line_style_map.get(_style_key, Qt.PenStyle.SolidLine)
+            _lw = self.config['appearance']['graph_line_width']
+            _smooth = self.config['appearance'].get('graph_line_smooth', False)
+
+            if _smooth and len(timestamps) >= 2:
+                import numpy as _np
+                pts_x = _np.array(timestamps, dtype=float)
+                pts_y = _np.array(glucose_values, dtype=float)
+                n = len(pts_x)
+                _num_sub = 36  # denser interpolation keeps the curve visually smooth at common zoom levels
+
+                # Monotone cubic (Fritsch-Carlson) interpolation.
+                # Guarantees no Y overshoot and always moves forward on X.
+                dx = _np.diff(pts_x)
+                dy = _np.diff(pts_y)
+                with _np.errstate(invalid='ignore', divide='ignore'):
+                    delta = _np.where(dx != 0, dy / dx, 0.0)
+
+                m = _np.empty(n)
+                m[0] = delta[0]
+                m[-1] = delta[-1]
+                m[1:-1] = (delta[:-1] + delta[1:]) / 2.0
+
+                # Vectorised Fritsch-Carlson monotonicity correction.
+                # Use masked division to avoid divide-by-zero warnings on flat segments.
+                alpha = _np.zeros_like(delta)
+                beta = _np.zeros_like(delta)
+                _np.divide(m[:-1], delta, out=alpha, where=delta != 0)
+                _np.divide(m[1:], delta, out=beta, where=delta != 0)
+                r2 = alpha * alpha + beta * beta
+                mask = r2 > 9
+                tau = _np.where(mask, 3.0 / _np.sqrt(_np.where(r2 > 0, r2, 1.0)), 1.0)
+                m[:-1] = _np.where(mask, tau * alpha * delta, m[:-1])
+                m[1:]  = _np.where(mask, tau * beta  * delta, m[1:])
+                zero_mask = delta == 0
+                m[:-1] = _np.where(zero_mask, 0.0, m[:-1])
+                m[1:]  = _np.where(zero_mask, 0.0, m[1:])
+
+                # Build all sub-points with vectorised Hermite evaluation
+                _t = _np.linspace(0.0, 1.0, _num_sub + 1)
+                _t2, _t3 = _t * _t, _t * _t * _t
+                h00 =  2*_t3 - 3*_t2 + 1   # shape (_num_sub+1,)
+                h10 =    _t3 - 2*_t2 + _t
+                h01 = -2*_t3 + 3*_t2
+                h11 =    _t3 -   _t2
+
+                # For each segment build x/y arrays; drop last point except on final segment
+                x_parts = []
+                y_parts = []
+                for i in range(n - 1):
+                    h  = dx[i]
+                    sx = pts_x[i] + _t * h
+                    sy = (h00 * pts_y[i] + h10 * h * m[i] +
+                          h01 * pts_y[i+1] + h11 * h * m[i+1])
+                    if i < n - 2:
+                        x_parts.append(sx[:-1])
+                        y_parts.append(sy[:-1])
+                    else:
+                        x_parts.append(sx)
+                        y_parts.append(sy)
+
+                all_sub_x = _np.concatenate(x_parts)
+                all_sub_y = _np.concatenate(y_parts)
+
+                # Color each sub-point, then batch same-color runs into
+                # a single PlotCurveItem (cheaper than self.graph.plot()).
+                sub_colors = [
+                    self.get_glucose_color_with_interpolation(
+                        float(y_val), target_low, target_high, glucose_colors,
+                        sgv_max=sgv_max, sgv_min=sgv_min
+                    )
+                    for y_val in all_sub_y
+                ]
+                segments = []
+                idx = 0
+                total = len(all_sub_x)
+                while idx < total - 1:
+                    cur_col = sub_colors[idx]
+                    j = idx + 1
+                    while j < total - 1 and sub_colors[j] == cur_col:
+                        j += 1
+                    segments.append((all_sub_x[idx:j+1], all_sub_y[idx:j+1], cur_col))
+                    idx = j
+
+                self._apply_line_segments(segments, _lw, _pen_style)
+            else:
+                segment_colors = []
+                for i in range(len(timestamps) - 1):
+                    avg_glucose = (glucose_values[i] + glucose_values[i + 1]) / 2
+                    segment_colors.append(
+                        self.get_glucose_color_with_interpolation(
+                            avg_glucose, target_low, target_high, glucose_colors,
+                            sgv_max=sgv_max, sgv_min=sgv_min
+                        )
+                    )
+
+                segments = []
+                idx = 0
+                seg_total = len(segment_colors)
+                while idx < seg_total:
+                    cur_color = segment_colors[idx]
+                    j = idx + 1
+                    while j < seg_total and segment_colors[j] == cur_color:
+                        j += 1
+                    segments.append((timestamps[idx:j + 1], glucose_values[idx:j + 1], cur_color))
+                    idx = j
+
+                self._apply_line_segments(segments, _lw, _pen_style)
             
             dot_size = self.get_adaptive_dot_size()
-            for i, (x, y, color) in enumerate(zip(timestamps, glucose_values, colors)):
-                dot = self.graph.plot([x], [y],
-                    pen=pg.mkPen(self.config['appearance']['marker_outline_color'], 
-                                width=self.config['appearance']['marker_outline_width']),
-                    symbol='o', 
-                    symbolSize=dot_size,
-                    symbolBrush=color,
-                    symbolPen=pg.mkPen(self.config['appearance']['marker_outline_color'], 
-                                      width=self.config['appearance']['marker_outline_width'])
-                )
-                dot.setZValue(100)
+            marker_outline_color = self.config['appearance']['marker_outline_color']
+            marker_outline_width = self.config['appearance']['marker_outline_width']
+            self._scatter_item.setData(
+                x=timestamps,
+                y=glucose_values,
+                symbol='o',
+                size=dot_size,
+                pen=pg.mkPen(marker_outline_color, width=marker_outline_width),
+                brush=[pg.mkBrush(c) for c in colors],
+            )
             
             if timestamps and glucose_values:
                 newest_x = timestamps[-1]
@@ -2052,16 +2807,18 @@ class GlucoseWidget(QWidget):
                     else:
                         text_y = max(newest_y - min_clearance, y_min + y_margin)
                 
-                text_item = pg.TextItem(
-                    text=f"{newest_y}", 
-                    color=newest_color,
-                    fill=pg.mkBrush(0, 0, 0, 180),
-                    border=pg.mkPen(newest_color, width=1),
-                    anchor=(0.5, 0.5)
-                )
-                text_item.setFont(pg.QtGui.QFont("Arial", 10, pg.QtGui.QFont.Weight.Bold))
-                text_item.setPos(text_x, text_y)
-                self.graph.addItem(text_item)
+                if self.config.get('show_float_glucose', True):
+                    text_item = pg.TextItem(
+                        text=f"{newest_y}", 
+                        color=newest_color,
+                        fill=self._get_cached_brush(QColor(0, 0, 0, 180)),
+                        border=self._get_cached_pen(newest_color, width=1),
+                        anchor=(0.5, 0.5)
+                    )
+                    text_item.setFont(pg.QtGui.QFont("sans-serif", 10, pg.QtGui.QFont.Weight.Bold))
+                    text_item.setPos(text_x, text_y)
+                    self.graph.addItem(text_item)
+                    self._value_text_item = text_item
 
             current = glucose_values[-1]
             
@@ -2078,7 +2835,6 @@ class GlucoseWidget(QWidget):
                         delta_text = " (0)"
             
             trend_arrow = self.convert_nightscout_trend(last_valid_direction)
-            
             glucose_text = f"{current} {trend_arrow}{delta_text}"
             self.label.setText(glucose_text)
             
@@ -2106,17 +2862,22 @@ class GlucoseWidget(QWidget):
             self.update_color(current)
             self._update_tray_icon(current, trend_arrow, delta_text)
 
-            if glucose_values:
-                y_min, y_max = self._compute_y_range(glucose_values)
-                self.graph.setYRange(y_min, y_max, padding=0)  # type: ignore[call-arg]
+            y_min, y_max = self._compute_y_range(glucose_values)
+            self.graph.setYRange(y_min, y_max, padding=0)  # type: ignore[call-arg]
 
-            # Fetch all treatments once — used for both graph markers and header pills
-            all_treatments = []
-            if self.config.get('show_treatments', True) or self.config.get('header_pills', []):
-                all_treatments = self.fetch_all_treatments()
+            # Treatments come from background cache updates.
+            all_treatments = list(self._treatments_cache)
 
             if self.config.get('show_treatments', True):
-                self.add_treatments_to_graph(all_treatments)
+                treatment_render_key = self._build_treatment_render_key(all_treatments, y_min, y_max)
+                if treatment_render_key != self._last_treatment_render_key:
+                    self.clear_treatments()
+                    self.add_treatments_to_graph(all_treatments)
+                    self._last_treatment_render_key = treatment_render_key
+            else:
+                if self.treatment_items:
+                    self.clear_treatments()
+                self._last_treatment_render_key = None
 
             self._update_header_pills(all_treatments)
 
@@ -2142,16 +2903,50 @@ class GlucoseWidget(QWidget):
                 self.current_time_line.setPos(now)
             
             self.current_max_time = now
+            self._last_render_key = render_key
 
         except Exception as e:
-            error_text = f"Error: {str(e)}"
-            self.label.setText(error_text)
-            self.time_label.setText("")
-            self.age_label.setText("")
+            log.warning("update_glucose error: %s", e)
+            # Classify the error for a meaningful label
+            if isinstance(e, requests.exceptions.ConnectionError):
+                msg = "⚠ no connection"
+                tip = "⚠ No connection — check network"
+            elif isinstance(e, requests.exceptions.Timeout):
+                msg = "⚠ timeout"
+                tip = "⚠ Request timed out"
+            elif isinstance(e, requests.exceptions.HTTPError):
+                code = e.response.status_code if e.response is not None else "?"
+                if code in (401, 403):
+                    msg = f"⚠ auth error ({code})"
+                    tip = f"⚠ HTTP {code} — check API secret"
+                elif code == 404:
+                    msg = "⚠ URL not found"
+                    tip = "⚠ HTTP 404 — check Nightscout URL"
+                elif isinstance(code, int) and code >= 500:
+                    msg = f"⚠ server error ({code})"
+                    tip = f"⚠ HTTP {code} — Nightscout server error"
+                else:
+                    msg = f"⚠ HTTP {code}"
+                    tip = f"⚠ HTTP {code}: {e}"
+            elif isinstance(e, ValueError):
+                msg = "⚠ no data"
+                tip = f"⚠ No valid glucose data: {e}"
+            else:
+                msg = "⚠ fetch error"
+                tip = f"⚠ Error: {e}"
+            # Keep the last glucose reading visible — muted to signal degraded state.
+            self.label.setStyleSheet(
+                "color: #8b96aa; background-color: transparent; "
+                "font-weight: bold; padding: 0px 4px;"
+            )
+            self.age_label.setText(msg)
+            self.age_label.setStyleSheet(
+                "color: #ff7a7a; background-color: transparent; padding: 0px 4px;"
+            )
             if hasattr(self, '_tray'):
-                self._tray.setToolTip(f"NSOverlay\nError: {str(e)}")
-            self.auto_resize_to_fit_content(error_text)
+                self._tray.setToolTip(f"NSOverlay\n{tip}")
             self._apply_widget_background()
+            self._apply_header_background()
 
     def interpolate_glucose_5min_ago(self, timestamps, glucose_values):
         """Interpolate glucose value from 5 minutes ago using linear interpolation"""
@@ -2201,7 +2996,10 @@ class GlucoseWidget(QWidget):
         """Update current time and entry age without fetching new data"""
         try:
             current_time = datetime.now()
-            self.time_label.setText(current_time.strftime("%H:%M"))
+            time_text = current_time.strftime("%H:%M")
+            if time_text != self._last_time_text:
+                self.time_label.setText(time_text)
+                self._last_time_text = time_text
             
             if hasattr(self, 'current_time_line') and self.current_time_line is not None:
                 self.current_time_line.setPos(current_time.timestamp())
@@ -2219,22 +3017,38 @@ class GlucoseWidget(QWidget):
                     age_hours = age_seconds // 3600
                     age_text = f"{age_hours} hr ago"
                     
-                self.age_label.setText(age_text)
+                is_stale = age_seconds > 900
+                display_age_text = f"⚠ {age_text}" if is_stale else age_text
+                if display_age_text != self._last_age_text:
+                    self.age_label.setText(display_age_text)
+                    self._last_age_text = display_age_text
                 
                 # Update age label color based on freshness
                 if age_seconds <= 300:  # 5 minutes or less
-                    age_color = "#00dd00"  # Fresh - green
+                    age_color = "#37d39a"  # Fresh
                 elif age_seconds <= 900:  # 15 minutes or less
-                    age_color = "#dddd00"  # Warning - yellow
+                    age_color = "#f2c14e"  # Warning
                 else:
-                    age_color = "#dd0000"  # Stale - red
-                pill_opacity_pct = self.config['appearance'].get('label_pill_opacity', 67)
-                pill_alpha = round(pill_opacity_pct / 100 * 255)
-                pill = f"rgba(0, 0, 0, {pill_alpha})"
-                self.age_label.setStyleSheet(
-                    f"color: {age_color}; background-color: {pill}; "
-                    f"border-radius: 4px; padding: 1px 6px; margin: 0px;"
-                )
+                    age_color = "#ff7a7a"  # Stale
+                if age_color != self._last_age_color:
+                    self.age_label.setStyleSheet(
+                        f"color: {age_color}; background-color: transparent; padding: 0px 4px;"
+                    )
+                    self._last_age_color = age_color
+
+                # Grey out glucose label when stale; restore when fresh
+                if is_stale != self._last_glucose_stale_state:
+                    self._last_glucose_stale_state = is_stale
+                    if is_stale:
+                        self.label.setStyleSheet(
+                            "color: #8b96aa; background-color: transparent; "
+                            "font-weight: bold; padding: 0px 4px;"
+                        )
+                    elif hasattr(self, '_last_glucose_color'):
+                        self.label.setStyleSheet(
+                            f"color: {self._last_glucose_color}; background-color: transparent; "
+                            "font-weight: bold; padding: 0px 4px;"
+                        )
 
                 # Refresh tray icon when staleness state changes (fresh→stale)
                 now_stale = age_seconds > 900
@@ -2245,8 +3059,8 @@ class GlucoseWidget(QWidget):
                         self._last_tray_trend,
                         self._last_tray_delta,
                     )
-        except:
-            pass  # Silent fail for time updates
+        except Exception as e:
+            log.debug("update_time_display error: %s", e)
     
     def _compute_y_range(self, glucose_values):
         """Compute Y axis range that always shows target lines and the current reading."""
@@ -2278,21 +3092,15 @@ class GlucoseWidget(QWidget):
     def calculate_adaptive_y_range(self):
         """Calculate appropriate Y range based on current glucose data"""
         try:
-            
-            headers = {"api-secret": self.api_secret}
-            response = requests.get(
-                f"{self.nightscout_url}/api/v1/entries.json?count=50",
-                headers=headers,
-                timeout=3
-            )
-            
-            if response.status_code == 200:
-                entries = response.json()
-                if entries:
-                    glucose_values = [entry["sgv"] for entry in entries if isinstance(entry.get("sgv"), (int, float))]
-                    if glucose_values:
-                        return self._compute_y_range(glucose_values)
-        except:
+            if self._entries_cache:
+                glucose_values = []
+                for entry in self._entries_cache:
+                    sgv = entry.get("sgv") if isinstance(entry, dict) else None
+                    if isinstance(sgv, (int, float)):
+                        glucose_values.append(int(sgv))
+                if glucose_values:
+                    return self._compute_y_range(glucose_values)
+        except Exception:
             pass
         
         return 40, 300
@@ -2325,7 +3133,7 @@ class GlucoseWidget(QWidget):
     
     def get_adaptive_dot_size(self):
         """Calculate adaptive dot size based on Y-axis zoom level"""
-        if not self.config.get('adaptive_dot_size', True):
+        if not self.config.get('adaptive_dot_size', False):
             return self.config['data_point_size']
             
         try:
@@ -2380,9 +3188,10 @@ class GlucoseWidget(QWidget):
         else:
             text_color = "#ffaa44"
 
+        self._last_glucose_color = text_color
         self._apply_widget_background()
+        self._apply_header_background()
         self._apply_header_label_styles(glucose_text_color=text_color)
-
 
 class ColorButton(QPushButton):
     """Push-button that shows a color swatch and opens QColorDialog on click."""
@@ -2390,16 +3199,38 @@ class ColorButton(QPushButton):
 
     def __init__(self, color: str = "#ffffff", parent=None):
         super().__init__(parent)
-        self._color = color
-        self.setFixedSize(80, 24)
+        self._color = QColor(color).name() if QColor(color).isValid() else "#ffffff"
+        self.setFixedSize(128, 30)
         self._refresh()
         self.clicked.connect(self._pick)
 
     def _pick(self):
-        c = QColorDialog.getColor(QColor(self._color), self, "Choose Color")
-        if c.isValid():
-            self._color = c.name()
-            self._refresh()
+        original_color = self._color
+        dlg = QColorDialog(QColor(self._color), self)
+        dlg.setWindowTitle("Choose Pill Text Color")
+        dlg.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        dlg.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, False)
+
+        def _on_live_color(c: QColor):
+            if c.isValid():
+                self._set_color(c.name(), emit_signal=True)
+
+        dlg.currentColorChanged.connect(_on_live_color)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            chosen = dlg.currentColor()
+            if chosen.isValid():
+                self._set_color(chosen.name(), emit_signal=True)
+        else:
+            self._set_color(original_color, emit_signal=True)
+
+    def _set_color(self, color: str, emit_signal: bool = False):
+        normalized = QColor(color).name() if QColor(color).isValid() else self._color
+        if normalized == self._color:
+            return
+        self._color = normalized
+        self._refresh()
+        if emit_signal:
             self.colorChanged.emit(self._color)
 
     def _refresh(self):
@@ -2407,10 +3238,11 @@ class ColorButton(QPushButton):
         luma = 0.299 * r + 0.587 * g + 0.114 * b
         text = "#000000" if luma > 128 else "#ffffff"
         self.setStyleSheet(
-            f"background:{self._color}; color:{text}; "
-            f"border:1px solid #666; border-radius:3px; font-size:10px;"
+            f"background: {self._color}; color: {text}; "
+            "border: 1px solid #4a5d80; border-radius: 10px; "
+            "font-size: 11px; font-weight: 600; padding: 0px 10px;"
         )
-        self.setText(self._color)
+        self.setText(f"{self._color.upper()}  Pick")
 
     @property
     def color(self) -> str:
@@ -2418,8 +3250,7 @@ class ColorButton(QPushButton):
 
     @color.setter
     def color(self, val: str):
-        self._color = val
-        self._refresh()
+        self._set_color(val, emit_signal=False)
 
 
 class PillEditDialog(QDialog):
@@ -2432,23 +3263,36 @@ class PillEditDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Edit Pill" if pill else "Add Pill")
         self.setModal(True)
-        self.setFixedSize(440, 320)
+        self.setFixedSize(480, 480)
         pill = pill or {}
 
         layout = QVBoxLayout()
-        layout.setSpacing(8)
+        layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
+        # ─── Preview at top ───
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(40)
+        layout.addWidget(self.preview_label)
+
+        # ─── Separator ───
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep)
+
+        # ─── Form ───
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setSpacing(8)
+        form.setSpacing(10)
 
         self.event_type_edit = QLineEdit(pill.get("event_type", ""))
-        self.event_type_edit.setPlaceholderText("e.g. Basal Injection")
+        self.event_type_edit.setPlaceholderText("e.g. Bolus|Meal Bolus")
         form.addRow("Event Type:", self.event_type_edit)
 
         self.label_edit = QLineEdit(pill.get("label", ""))
-        self.label_edit.setPlaceholderText("e.g. Basal")
+        self.label_edit.setPlaceholderText("e.g. Bolus")
         form.addRow("Label:", self.label_edit)
 
         self.field_combo = QComboBox()
@@ -2463,11 +3307,32 @@ class PillEditDialog(QDialog):
         form.addRow("Suffix:", self.suffix_edit)
 
         self.color_btn = ColorButton(pill.get("color", "#80e8e0"))
-        form.addRow("Color:", self.color_btn)
+        color_row = QWidget()
+        color_layout = QHBoxLayout()
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.setSpacing(8)
+        self.color_hex_edit = QLineEdit(self.color_btn.color.upper())
+        self.color_hex_edit.setMaxLength(7)
+        self.color_hex_edit.setFixedWidth(96)
+        self.color_hex_edit.setPlaceholderText("#RRGGBB")
+        self.color_hex_edit.editingFinished.connect(self._apply_hex_color)
+        color_layout.addWidget(self.color_btn)
+        color_layout.addWidget(self.color_hex_edit)
+        color_layout.addStretch()
+        color_row.setLayout(color_layout)
+        form.addRow("Color:", color_row)
+
+        self.bold_chk = QCheckBox("Bold text")
+        self.bold_chk.setChecked(bool(pill.get("bold", False)))
+        form.addRow("Style:", self.bold_chk)
 
         self.sum_daily_chk = QCheckBox("Sum all matching entries for today")
         self.sum_daily_chk.setChecked(bool(pill.get("sum_daily", False)))
         form.addRow("", self.sum_daily_chk)
+
+        self.enabled_chk = QCheckBox("Show this pill in header")
+        self.enabled_chk.setChecked(bool(pill.get("enabled", True)))
+        form.addRow("", self.enabled_chk)
 
         self.max_age_spin = QDoubleSpinBox()
         self.max_age_spin.setRange(0, 72)
@@ -2485,11 +3350,11 @@ class PillEditDialog(QDialog):
         btn_row.addStretch()
         ok_btn = QPushButton("OK")
         ok_btn.setDefault(True)
-        ok_btn.setMinimumWidth(80)
+        ok_btn.setMinimumWidth(90)
         ok_btn.setMinimumHeight(32)
         ok_btn.clicked.connect(self._accept)
         cancel_btn = QPushButton("Cancel")
-        cancel_btn.setMinimumWidth(80)
+        cancel_btn.setMinimumWidth(90)
         cancel_btn.setMinimumHeight(32)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(ok_btn)
@@ -2498,6 +3363,57 @@ class PillEditDialog(QDialog):
 
         self.setLayout(layout)
         self.setStyleSheet(DARK_QSS)
+
+        self.event_type_edit.textChanged.connect(self._update_preview)
+        self.label_edit.textChanged.connect(self._update_preview)
+        self.field_combo.currentTextChanged.connect(self._update_preview)
+        self.suffix_edit.textChanged.connect(self._update_preview)
+        self.color_btn.colorChanged.connect(self._update_preview)
+        self.color_btn.colorChanged.connect(lambda c: self.color_hex_edit.setText(c.upper()))
+        self.bold_chk.toggled.connect(self._update_preview)
+        self._update_preview()
+
+    def _apply_hex_color(self):
+        raw = self.color_hex_edit.text().strip()
+        if raw and not raw.startswith("#"):
+            raw = f"#{raw}"
+        c = QColor(raw)
+        if c.isValid():
+            self.color_btn.color = c.name()
+            self.color_hex_edit.setText(c.name().upper())
+            self._update_preview()
+        else:
+            self.color_hex_edit.setText(self.color_btn.color.upper())
+
+    def _preview_value_for_field(self, field_name: str) -> str:
+        sample_values = {
+            "notes": "sample",
+            "amount": "12",
+            "insulin": "2.5",
+            "carbs": "18",
+            "duration": "30",
+            "absolute": "0.85",
+            "rate": "1.20",
+            "enteredBy": "you",
+            "eventType": "Event",
+        }
+        return sample_values.get(field_name, "value")
+
+    def _update_preview(self):
+        event_type = self.event_type_edit.text().strip()
+        label_text = self.label_edit.text().strip() or event_type or "Pill"
+        field_name = self.field_combo.currentText()
+        value_text = self._preview_value_for_field(field_name)
+        suffix = self.suffix_edit.text()
+        preview_text = f"{label_text}: {value_text}{suffix}" if value_text else label_text
+
+        font_weight = "700" if self.bold_chk.isChecked() else "500"
+        self.preview_label.setText(preview_text)
+        self.preview_label.setStyleSheet(
+            f"color: {self.color_btn.color}; background-color: rgba(255, 255, 255, 14); "
+            "border: 1px solid #3a4760; border-radius: 8px; padding: 3px 8px; "
+            f"font-size: 12px; font-weight: {font_weight};"
+        )
 
     def _accept(self):
         if not self.event_type_edit.text().strip():
@@ -2512,7 +3428,9 @@ class PillEditDialog(QDialog):
             "show_field": self.field_combo.currentText(),
             "suffix":     self.suffix_edit.text(),
             "color":      self.color_btn.color,
+            "bold":       self.bold_chk.isChecked(),
             "sum_daily":  self.sum_daily_chk.isChecked(),
+            "enabled":    self.enabled_chk.isChecked(),
         }
         if self.max_age_spin.value() > 0:
             d["max_age_hours"] = self.max_age_spin.value()
@@ -2531,11 +3449,11 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle("Settings — NSOverlay")
         self.setModal(True)
-        self.setMinimumSize(520, 600)
+        self.setMinimumSize(560, 640)
 
         root = QVBoxLayout()
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(10)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_connection_tab(), "Connection")
@@ -2640,6 +3558,11 @@ class SettingsDialog(QDialog):
         self.line_width_slider, line_row = self._slider_row(1, 8, ap.get("graph_line_width", 2))
         form.addRow("Line Width:", line_row)
 
+        self.smooth_line_chk = QCheckBox()
+        self.smooth_line_chk.setChecked(bool(ap.get("graph_line_smooth", False)))
+        self.smooth_line_chk.setToolTip("Use smooth monotone cubic curves instead of straight line segments")
+        form.addRow("Smooth Curve:", self.smooth_line_chk)
+
         self.dot_size_slider, dot_row = self._slider_row(2, 20, c.get("data_point_size", 6))
         form.addRow("Dot Size:", dot_row)
 
@@ -2650,6 +3573,11 @@ class SettingsDialog(QDialog):
         self.show_delta_chk = QCheckBox()
         self.show_delta_chk.setChecked(bool(c.get("show_delta", True)))
         form.addRow("Show Delta:", self.show_delta_chk)
+
+        self.show_float_glucose_chk = QCheckBox()
+        self.show_float_glucose_chk.setChecked(bool(c.get("show_float_glucose", True)))
+        self.show_float_glucose_chk.setToolTip("Show or hide the floating glucose value label inside the graph")
+        form.addRow("Show Floating Value:", self.show_float_glucose_chk)
 
         self.show_y_label_chk = QCheckBox()
         self.show_y_label_chk.setChecked(bool(ap.get("show_y_label", True)))
@@ -2690,6 +3618,14 @@ class SettingsDialog(QDialog):
         self.graph_opacity_slider.sliderReleased.connect(
             lambda: self.parent_widget.apply_settings(self._collect()))
         form.addRow("Graph Opacity:", graph_op_row)
+
+        self.transparency_enabled_chk = QCheckBox()
+        self.transparency_enabled_chk.setChecked(bool(ap.get("transparency_enabled", True)))
+        self.transparency_enabled_chk.setToolTip(
+            "Enable to use the opacity sliders; disable to force 100% opacity for graph and header"
+        )
+        self.transparency_enabled_chk.toggled.connect(self._toggle_transparency_enabled_from_checkbox)
+        form.addRow("Enable Transparency:", self.transparency_enabled_chk)
 
         self.pill_opacity_slider, pill_op_row = self._pct_slider_row(
             ap.get("label_pill_opacity", 67))
@@ -2733,10 +3669,7 @@ class SettingsDialog(QDialog):
 
         def _sep(title):
             lbl = QLabel(f"  {title}")
-            lbl.setStyleSheet(
-                "color: #80e8e0; font-weight: bold; font-size: 10px; "
-                "background: #22223a; padding: 4px 10px; border-radius: 4px; "
-                "margin-top: 4px; border-left: 3px solid #00d4aa;")
+            lbl.setObjectName("SectionCaption")
             form.addRow(lbl)
 
         _sep("Glucose Ranges")
@@ -2798,7 +3731,7 @@ class SettingsDialog(QDialog):
         info = QLabel(
             "Pills appear in the header row and show Nightscout treatment data. "
             "Double-click an entry to edit it.")
-        info.setStyleSheet("color: #7070a8; font-size: 10px;")
+        info.setObjectName("DialogSubtitle")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -2812,6 +3745,7 @@ class SettingsDialog(QDialog):
         add_btn    = QPushButton("Add")
         edit_btn   = QPushButton("Edit")
         remove_btn = QPushButton("Remove")
+        toggle_btn = QPushButton("Show/Hide")
         up_btn     = QPushButton("↑")
         dn_btn     = QPushButton("↓")
         up_btn.setFixedWidth(32)
@@ -2819,9 +3753,10 @@ class SettingsDialog(QDialog):
         add_btn.clicked.connect(self._add_pill)
         edit_btn.clicked.connect(self._edit_pill)
         remove_btn.clicked.connect(self._remove_pill)
+        toggle_btn.clicked.connect(self._toggle_pill_visibility)
         up_btn.clicked.connect(self._move_pill_up)
         dn_btn.clicked.connect(self._move_pill_down)
-        for b in (add_btn, edit_btn, remove_btn, up_btn, dn_btn):
+        for b in (add_btn, edit_btn, remove_btn, toggle_btn, up_btn, dn_btn):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -2838,7 +3773,9 @@ class SettingsDialog(QDialog):
             field  = p.get("show_field", "")
             suffix = p.get("suffix", "")
             mode   = "daily sum" if p.get("sum_daily") else f"max {p.get('max_age_hours', '—')}h"
-            self.pills_list.addItem(f"{label}  ·  {field} {suffix}  [{mode}]")
+            visibility = "ON" if p.get("enabled", True) else "OFF"
+            weight = "bold" if p.get("bold", False) else "normal"
+            self.pills_list.addItem(f"[{visibility}] {label}  ·  {field} {suffix}  [{mode}] [{weight}]")
 
     def _add_pill(self):
         dlg = PillEditDialog(self)
@@ -2863,6 +3800,16 @@ class SettingsDialog(QDialog):
             return
         self._pills.pop(row)
         self._refresh_pills_list()
+
+    def _toggle_pill_visibility(self):
+        row = self.pills_list.currentRow()
+        if row < 0:
+            return
+        pill = dict(self._pills[row])
+        pill["enabled"] = not bool(pill.get("enabled", True))
+        self._pills[row] = pill
+        self._refresh_pills_list()
+        self.pills_list.setCurrentRow(row)
 
     def _move_pill_up(self):
         row = self.pills_list.currentRow()
@@ -2931,6 +3878,16 @@ class SettingsDialog(QDialog):
         self.parent_widget.config.setdefault("appearance", {})["graph_background_opacity"] = v
         self.parent_widget._update_graph_background()
         self.parent_widget._apply_widget_background()
+        self.parent_widget._apply_header_background()
+
+    def _toggle_transparency_enabled_from_checkbox(self, checked: bool):
+        self.config.setdefault("appearance", {})["transparency_enabled"] = checked
+        self.parent_widget.config.setdefault("appearance", {})["transparency_enabled"] = checked
+        self.parent_widget._update_graph_background()
+        self.parent_widget._apply_widget_background()
+        self.parent_widget._apply_header_background()
+        self.parent_widget._apply_header_label_styles()
+        self.parent_widget.apply_settings(self._collect())
 
     def _preview_pill_opacity(self, v: int):
         self.parent_widget.config.setdefault("appearance", {})["label_pill_opacity"] = v
@@ -2946,7 +3903,9 @@ class SettingsDialog(QDialog):
         # Graph appearance
         ap["graph_line_width"]        = self.line_width_slider.value()
         ap["graph_line_style"]        = self.line_style_combo.currentData()
+        ap["graph_line_smooth"]       = self.smooth_line_chk.isChecked()
         ap["graph_background_opacity"]= self.graph_opacity_slider.value()
+        ap["transparency_enabled"]    = self.transparency_enabled_chk.isChecked()
         ap["label_pill_opacity"]      = self.pill_opacity_slider.value()
         ap["target_zone_opacity"]     = self.zone_opacity_spin.value()
         ap["grid_opacity"]            = round(self.grid_opacity_slider.value() / 100, 2)
@@ -3000,6 +3959,7 @@ class SettingsDialog(QDialog):
         new_config["data_point_size"]       = self.dot_size_slider.value()
         new_config["adaptive_dot_size"]     = self.adaptive_dot_chk.isChecked()
         new_config["show_delta"]            = self.show_delta_chk.isChecked()
+        new_config["show_float_glucose"]     = self.show_float_glucose_chk.isChecked()
         new_config["gradient_interpolation"]= self.gradient_chk.isChecked()
         new_config["glucose_font_size"]     = self.glucose_font_spin.value()
         new_config["time_font_size"]        = self.time_font_spin.value()
