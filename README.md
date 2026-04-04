@@ -9,6 +9,7 @@ A lightweight always-on-top desktop widget for Windows that displays real-time g
 - Adjustable transparency — from fully opaque to fully see-through
 - Draggable, resizable, remembers position and zoom state
 - Settings dialog for live customization (dot size, line width, opacity, font sizes, target range)
+- Quick Nightscout entry for insulin and carbs from the widget or tray menu
 - Right-click context menu with all options
 - **System tray icon** — colour-coded icon shows the current glucose value at a glance; right-click for a quick menu, double-click to toggle the widget
 
@@ -25,7 +26,7 @@ A lightweight always-on-top desktop widget for Windows that displays real-time g
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/yourusername/nsoverlay.git
+git clone https://github.com/guilhermediasl/NSOverlay.git
 cd nsoverlay
 python -m venv .venv
 .venv\Scripts\activate       # Windows
@@ -60,7 +61,7 @@ cp config.json.example config.json
 |---|---|---|
 | `nightscout_url` | Your Nightscout site URL (include `https://`) | — |
 | `api_secret` | Plain-text API secret (hashed automatically) | — |
-| `refresh_interval_ms` | How often to pull new data (ms) | `60000` |
+| `refresh_interval_ms` | How often to pull new data (ms) | `10000` |
 | `timezone_offset_hours` | Local UTC offset | `0` |
 | `time_window_hours` | Hours of history shown in graph | `3` |
 | `entries_to_fetch` | Number of glucose entries to request from the API | `90` |
@@ -70,12 +71,13 @@ cp config.json.example config.json
 | `time_font_size` | Font size for the time label | `12` |
 | `age_font_size` | Font size for the data-age label | `10` |
 | `show_delta` | Show glucose delta vs 5 min ago | `true` |
+| `adaptive_dot_size` | Scale dot size based on current zoom level | `false` |
 | `data_point_size` | Dot size for glucose data points | `6` |
 | `show_treatments` | Plot bolus / carb / exercise markers on the graph | `true` |
 | `treatments_to_fetch` | Number of treatments to request from the API | `50` |
-| `gradient_interpolation` | Colour-gradient from yellow→red as glucose moves away from range | `false` |
+| `gradient_interpolation` | Colour-gradient from yellow→red as glucose moves away from range | `true` |
 | `appearance.graph_background_opacity` | Graph background opacity 0–100 | `100` |
-| `appearance.label_pill_opacity` | Header label pill opacity 0–100 | `67` |
+| `appearance.label_pill_opacity` | Header label pill opacity 0–100 | `40` |
 | `appearance.graph_line_width` | Width of the glucose line in pixels | `2` |
 | `appearance.graph_line_style` | Line style: `solid`, `dash`, `dot`, `dashdot` | `"solid"` |
 | `appearance.show_y_label` | Show or hide the "Glucose" label on the Y axis | `true` |
@@ -144,6 +146,7 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 | Show/hide widget | Double-click tray icon, or tray right-click → Show/Hide NSOverlay |
 | Settings | Right-click widget or tray icon → Settings… |
 | Change Nightscout URL/secret | Right-click → Edit Connection… |
+| Log insulin/carbs | Right-click widget or tray icon → Log Insulin / Carbs… |
 | Reset graph view | Double-click the graph |
 | Zoom graph | Mouse wheel on graph |
 | Pan graph | Click-drag on graph |
@@ -159,14 +162,46 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 | `Ctrl+R` | Reload config from file |
 | `Escape` / `Q` | Minimize to tray |
 
+## How the code works
+
+NSOverlay is now organized as a modular codebase with one app entrypoint and focused packages under `src/`.
+
+### Runtime flow
+
+1. `nsoverlay.py` boots the app, loads styles, and resolves runtime paths.
+2. Config is loaded through `src/core/config_loader.py` (validation + defaults + deep merge).
+3. `GlucoseWidget` initializes UI, graph, tray icon, timers, and worker thread.
+4. Background API reads run in `src/data/remote_fetch_thread.py`.
+5. Main thread receives merged cache updates, computes render keys, and redraws only when needed.
+6. Timestamps are parsed via `src/core/datetime_parser.py` with bounded caching.
+7. Graph axis labels come from `src/graph/time_axis.py`.
+8. Setup and settings UIs are provided by `src/ui/setup_wizard.py` and `src/ui/settings_dialog.py`.
+
+### Module map
+
+- `nsoverlay.py`: Main app orchestration, rendering logic, interactions, tray behavior.
+- `src/core/config_loader.py`: Config file loading, validation, defaults, appearance deep-merge.
+- `src/core/datetime_parser.py`: Nightscout datetime parsing with cache.
+- `src/data/remote_fetch_thread.py`: Persistent QThread that fetches entries/treatments.
+- `src/graph/time_axis.py`: 24-hour axis label formatter.
+- `src/ui/setup_wizard.py`: First-run/edit-connection wizard.
+- `src/ui/settings_dialog.py`: Full settings dialog (tabs, pills editor, color controls).
+
+### Data and rendering model
+
+- Fetches are asynchronous and caches are merged forward, preventing regressions in age/timeline.
+- The widget keeps render keys for glucose, treatments, and pills to avoid expensive redraws.
+- Visual state (window position and zoom) is persisted locally in JSON files.
+
 ## File structure
 
 ```
 nsoverlay/
-├── nsoverlay.py              # Main application
+├── nsoverlay.py              # Main application entrypoint
 ├── nsoverlay.spec            # PyInstaller spec (release build)
 ├── nsoverlay_debug.spec      # PyInstaller spec (debug build)
 ├── build.ps1                 # Automated build script (handles MS Store Python fix)
+├── capture_screenshots.py    # Regenerates README screenshots under docs/images
 ├── create_shortcut.ps1       # Creates a desktop shortcut for taskbar pinning
 ├── set_appid.ps1             # Sets AppUserModelID on existing shortcuts
 ├── nsoverlay_launcher.vbs    # Silent VBS launcher (no console window)
@@ -177,6 +212,22 @@ nsoverlay/
 ├── requirements.txt          # Python dependencies
 ├── widget_position.json      # Auto-saved window position (gitignored)
 ├── zoom_state.json           # Auto-saved zoom state (gitignored)
+├── src/
+│   ├── core/
+│   │   ├── config_loader.py
+│   │   └── datetime_parser.py
+│   ├── data/
+│   │   └── remote_fetch_thread.py
+│   ├── graph/
+│   │   └── time_axis.py
+│   └── ui/
+│       ├── settings_dialog.py
+│       └── setup_wizard.py
+├── styles/
+│   ├── dark.qss
+│   └── context_menu.qss
+├── docs/
+│   └── images/
 └── README.md
 ```
 
