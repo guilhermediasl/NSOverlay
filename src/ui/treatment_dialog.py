@@ -3,6 +3,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
@@ -20,7 +21,12 @@ from src.data.nightscout_write_thread import TreatmentWriteRequest
 class TreatmentDialog(QDialog):
     """Dialog for logging insulin and carb treatments to Nightscout."""
 
-    def __init__(self, parent: QWidget | None = None, dark_qss: str = "") -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        dark_qss: str = "",
+        default_insulin_type: str = "Humalog Lispro",
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Log Treatment to Nightscout")
         self.setModal(True)
@@ -50,6 +56,19 @@ class TreatmentDialog(QDialog):
         self.insulin_spin.setSingleStep(0.5)
         self.insulin_spin.setSuffix(" U")
         form.addRow("Insulin:", self.insulin_spin)
+
+        self.insulin_type_combo = QComboBox()
+        self.insulin_type_combo.setEditable(True)
+        self.insulin_type_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.insulin_type_combo.addItems([
+            "Humalog Lispro",
+            "Novolog Aspart",
+            "Fiasp",
+            "Lyumjev",
+            "Apidra Glulisine",
+        ])
+        self.insulin_type_combo.setCurrentText(default_insulin_type or "Humalog Lispro")
+        form.addRow("Insulin Type:", self.insulin_type_combo)
 
         self.carbs_spin = QSpinBox()
         self.carbs_spin.setRange(0, 500)
@@ -111,6 +130,7 @@ class TreatmentDialog(QDialog):
             api_secret="",
             event_type=event_type,
             insulin=insulin,
+            insulin_type=self.insulin_type_combo.currentText().strip() or "Humalog Lispro",
             carbs=carbs,
             notes=self.notes_edit.text().strip(),
             entered_by=self.entered_by_edit.text().strip() or "NSOverlay",

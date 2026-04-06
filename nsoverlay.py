@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLa
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
 from PyQt6.QtGui import QFont, QColor, QAction, QFontMetrics, QPixmap, QPainter, QIcon
 import pyqtgraph as pg
+from pyqtgraph.graphicsItems.ViewBox import ViewBox
 from src.core import DateTimeParser, load_config as core_load_config
 from src.data import RemoteFetchThread, NightscoutTreatmentWriteThread, TreatmentWriteRequest
 from src.graph import TimeAxisItem
@@ -60,6 +61,45 @@ def _setup_logger() -> logging.Logger:
 
 log = _setup_logger()
 
+BOLUS_COLOR = '#1E90FF'
+
+INSULIN_TYPE_MODEL_FACTORS = {
+    "Humalog Lispro": {"dia_scale": 1.00, "peak_scale": 1.00, "onset_scale": 1.00},
+    "Novolog Aspart": {"dia_scale": 1.00, "peak_scale": 1.00, "onset_scale": 1.00},
+    "Fiasp": {"dia_scale": 0.92, "peak_scale": 0.78, "onset_scale": 0.65},
+    "Lyumjev": {"dia_scale": 0.90, "peak_scale": 0.75, "onset_scale": 0.60},
+    "Apidra Glulisine": {"dia_scale": 0.96, "peak_scale": 0.95, "onset_scale": 0.90},
+}
+
+INSULIN_TYPE_ALIASES = {
+    "humalog": "Humalog Lispro",
+    "humalog lispro": "Humalog Lispro",
+    "lispro": "Humalog Lispro",
+    "insulin lispro": "Humalog Lispro",
+    "novolog": "Novolog Aspart",
+    "aspart": "Novolog Aspart",
+    "fiasp": "Fiasp",
+    "lyumjev": "Lyumjev",
+    "apidra": "Apidra Glulisine",
+    "glulisine": "Apidra Glulisine",
+}
+
+CURVE_TO_INSULIN_TYPE = {
+    "rapid-acting": "Humalog Lispro",
+    "ultra-rapid": "Fiasp",
+}
+
+
+def _normalize_insulin_type_name(raw_value):
+    if not isinstance(raw_value, str):
+        return "Humalog Lispro"
+
+    candidate = raw_value.strip()
+    if not candidate:
+        return "Humalog Lispro"
+
+    return INSULIN_TYPE_ALIASES.get(candidate.lower(), candidate)
+
 
 # ── Stylesheet loader ─────────────────────────────────────────────────────────
 def _load_qss(filename: str) -> str:
@@ -94,6 +134,7 @@ class GlucoseWidget(QWidget):
 
         self.nightscout_url, self.api_secret, self.api_secret_raw, self.config = load_config()
         self.timezone_offset = self.config['timezone_offset']
+        self._profile_iob_settings = {}
         self.setObjectName("GlucoseWidget")
         
         # Initialize utility managers
@@ -254,11 +295,93 @@ class GlucoseWidget(QWidget):
 
         self._setup_tray()
 
+        self._profile_sync_timer = QTimer()
+        self._profile_sync_timer.timeout.connect(self._sync_iob_settings_from_nightscout)
+        self._profile_sync_timer.start(30 * 60 * 1000)
+        QTimer.singleShot(0, self._sync_iob_settings_from_nightscout)
+
     def _parse_ns_datetime(self, value):
         """Parse Nightscout ISO timestamps and return naive UTC datetime."""
         if not value:
             return None
         return self._datetime_parser.parse(str(value).strip())
+
+    def _select_active_profile_entry(self, payload):
+        if isinstance(payload, list):
+            candidates = [item for item in payload if isinstance(item, dict)]
+            if not candidates:
+                return None
+
+            def _entry_sort_key(entry):
+                mills = entry.get('mills')
+                if isinstance(mills, (int, float)):
+                    return float(mills)
+                created = self._parse_ns_datetime(entry.get('startDate') or entry.get('created_at') or "")
+                if created is not None:
+                    return created.timestamp() * 1000
+                return 0.0
+
+            return sorted(candidates, key=_entry_sort_key, reverse=True)[0]
+
+        if isinstance(payload, dict):
+            return payload
+        return None
+
+    def _extract_profile_iob_settings(self, entry):
+        if not isinstance(entry, dict):
+            return {}
+
+        store_raw = entry.get('store')
+        store = store_raw if isinstance(store_raw, dict) else {}
+        profile_name = entry.get('defaultProfile')
+        profile = store.get(profile_name) if isinstance(profile_name, str) else None
+        if not isinstance(profile, dict) and store:
+            first_key = next(iter(store.keys()), None)
+            profile = store.get(first_key) if first_key else None
+        if not isinstance(profile, dict):
+            profile = {}
+
+        extracted = {}
+
+        dia_value = profile.get('dia')
+        if isinstance(dia_value, (int, float)):
+            extracted['iob_dia_hours'] = max(2.0, min(12.0, float(dia_value)))
+
+        peak_value = profile.get('insulinPeakTime', profile.get('peak', profile.get('peakTime')))
+        if isinstance(peak_value, (int, float)):
+            extracted['iob_peak_minutes'] = max(30, min(180, int(peak_value)))
+
+        onset_value = profile.get('insulinOnsetTime', profile.get('onset', profile.get('onsetTime')))
+        if isinstance(onset_value, (int, float)):
+            extracted['iob_onset_minutes'] = max(0, min(60, int(onset_value)))
+
+        insulin_type = _normalize_insulin_type_name(
+            profile.get('insulinType', CURVE_TO_INSULIN_TYPE.get(str(profile.get('curve', '')).strip().lower(), ''))
+        )
+        if insulin_type:
+            extracted['default_insulin_type'] = insulin_type
+
+        return extracted
+
+    def _sync_iob_settings_from_nightscout(self):
+        if not self.nightscout_url or not self.api_secret:
+            return
+
+        try:
+            url = f"{self.nightscout_url.rstrip('/')}/api/v1/profile.json"
+            response = requests.get(
+                url,
+                headers={"api-secret": self.api_secret},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            active_entry = self._select_active_profile_entry(payload)
+            extracted = self._extract_profile_iob_settings(active_entry)
+            if extracted:
+                self._profile_iob_settings = extracted
+        except Exception as exc:
+            log.debug("Nightscout profile sync failed: %s", exc)
         
     def resizeEvent(self, event):
         """Position the close button in top-right corner when widget is resized"""
@@ -765,6 +888,50 @@ class GlucoseWidget(QWidget):
         self._scatter_item.setZValue(100)
         self.graph.addItem(self._scatter_item)
 
+        self._iob_axis = pg.AxisItem('right')
+        self._iob_axis.setPen(pg.mkPen(color=BOLUS_COLOR, width=1))
+        self._iob_axis.setTextPen(pg.mkPen(color=BOLUS_COLOR))
+        self._iob_axis.setLabel('IOB (U)', color=BOLUS_COLOR, size='10pt')
+        self._iob_axis.setStyle(showValues=False, tickLength=0)
+        if plot_item is not None:
+            layout = getattr(plot_item, 'layout', None)
+            if layout is not None:
+                layout.addItem(self._iob_axis, 2, 2)
+
+        self._iob_view = ViewBox()
+        self._iob_view.setMouseEnabled(x=False, y=False)
+        self._iob_view.setMenuEnabled(False)
+        scene = self.graph.scene()
+        if scene is not None:
+            scene.addItem(self._iob_view)
+        self._iob_axis.linkToView(self._iob_view)
+        if plot_item is not None:
+            self._iob_view.setXLink(plot_item)
+            vb = getattr(plot_item, 'vb', None)
+            if vb is not None:
+                vb.sigResized.connect(self._update_iob_view_geometry)
+
+        self._iob_zero_curve = pg.PlotCurveItem()
+        self._iob_zero_curve.setPen(pg.mkPen(None))
+        self._iob_curve = pg.PlotCurveItem()
+        self._iob_curve.setPen(pg.mkPen(BOLUS_COLOR, width=2))
+        self._iob_curve.setZValue(60)
+        self._iob_fill_item = pg.FillBetweenItem(
+            self._iob_zero_curve,
+            self._iob_curve,
+            brush=pg.mkBrush(30, 144, 255, 45),
+        )
+        self._iob_fill_item.setZValue(55)
+        self._iob_value_text = pg.TextItem(color=BOLUS_COLOR, anchor=(1.0, 0.5))
+        self._iob_value_text.setZValue(70)
+        self._iob_view.addItem(self._iob_fill_item)
+        self._iob_view.addItem(self._iob_zero_curve)
+        self._iob_view.addItem(self._iob_curve)
+        self._iob_view.addItem(self._iob_value_text)
+        self._iob_axis.setVisible(False)
+        self._iob_view.setVisible(False)
+        self._update_iob_view_geometry()
+
         self._value_text_item = None
         self.treatment_items = []
 
@@ -794,6 +961,22 @@ class GlucoseWidget(QWidget):
             "background: transparent; }"
         )
         self.main_layout.addWidget(graph_container, 1)
+
+    def _update_iob_view_geometry(self):
+        plot_item = self.graph.getPlotItem()
+        if plot_item is None or not hasattr(self, '_iob_view'):
+            return
+        try:
+            vb = getattr(plot_item, 'vb', None)
+            if vb is None:
+                return
+            rect = vb.sceneBoundingRect()
+            strip_height = max(34.0, rect.height() * 0.24)
+            strip_rect = rect.adjusted(0, rect.height() - strip_height, 0, 0)
+            self._iob_view.setGeometry(strip_rect)
+            self._iob_view.linkedViewChanged(vb, self._iob_view.XAxis)
+        except Exception:
+            pass
 
     def add_target_zones(self):
         """Add colored zones for low, target, and high glucose ranges"""
@@ -985,16 +1168,21 @@ class GlucoseWidget(QWidget):
             self.nightscout_url, self.api_secret, self.api_secret_raw, new_config = load_config()
             self.config.update(new_config)
             self.timezone_offset = self.config['timezone_offset']
+            self._sync_iob_settings_from_nightscout()
             self.update_glucose()
     
     def apply_settings(self, new_config, fetch_remote=False):
         # Update connection credentials if they changed
+        profile_sync_needed = False
         if new_config.get('nightscout_url'):
             if new_config['nightscout_url'] != self.nightscout_url:
                 self._entries_cache = []       # new source → discard cached data
                 self._treatments_cache = []
+                profile_sync_needed = True
             self.nightscout_url = new_config['nightscout_url']
         if new_config.get('api_secret_raw'):
+            if new_config['api_secret_raw'] != self.api_secret_raw:
+                profile_sync_needed = True
             self.api_secret_raw = new_config['api_secret_raw']
             self.api_secret = hashlib.sha1(self.api_secret_raw.encode()).hexdigest()
 
@@ -1033,6 +1221,10 @@ class GlucoseWidget(QWidget):
                 "gradient_interpolation": self.config.get('gradient_interpolation', True),
                 "show_treatments": self.config.get('show_treatments', True),
                 "treatments_to_fetch": self.config.get('treatments_to_fetch', 50),
+                "default_insulin_type": self.config.get('default_insulin_type', 'Humalog Lispro'),
+                "iob_dia_hours": self.config.get('iob_dia_hours', 5.0),
+                "iob_peak_minutes": self.config.get('iob_peak_minutes', 75),
+                "iob_onset_minutes": self.config.get('iob_onset_minutes', 15),
                 "header_pills": self.config.get('header_pills', []),
                 "appearance": self.config.get('appearance', {})
             }
@@ -1051,6 +1243,9 @@ class GlucoseWidget(QWidget):
         self.add_target_zones()
         self._apply_widget_background()
         self._last_treatment_render_key = None
+
+        if profile_sync_needed:
+            self._sync_iob_settings_from_nightscout()
 
         self.update_glucose(fetch_remote=fetch_remote)
 
@@ -1457,7 +1652,11 @@ class GlucoseWidget(QWidget):
 
     def show_treatment_dialog(self):
         """Open a dialog for logging insulin and carbs to Nightscout."""
-        dialog = TreatmentDialog(self, DARK_QSS)
+        dialog = TreatmentDialog(
+            self,
+            DARK_QSS,
+            default_insulin_type=str(self.config.get('default_insulin_type', 'Humalog Lispro')),
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -1467,6 +1666,7 @@ class GlucoseWidget(QWidget):
             api_secret=self.api_secret,
             event_type=request.event_type,
             insulin=request.insulin,
+            insulin_type=request.insulin_type,
             carbs=request.carbs,
             notes=request.notes,
             entered_by=request.entered_by,
@@ -1818,6 +2018,184 @@ class GlucoseWidget(QWidget):
             self.graph.removeItem(item)
         self.treatment_items = []
 
+    def _get_insulin_type_for_treatment(self, treatment):
+        insulin_type = _normalize_insulin_type_name(treatment.get('insulinType'))
+        if insulin_type == 'Humalog Lispro':
+            insulin_type = _normalize_insulin_type_name(treatment.get('insulin_type'))
+        if insulin_type == 'Humalog Lispro':
+            insulin_type = _normalize_insulin_type_name(
+                self._profile_iob_settings.get('default_insulin_type', 'Humalog Lispro')
+            )
+        if insulin_type == 'Humalog Lispro':
+            insulin_type = _normalize_insulin_type_name(self.config.get('default_insulin_type', 'Humalog Lispro'))
+        return insulin_type
+
+    def _get_insulin_model_params(self, insulin_type):
+        normalized = _normalize_insulin_type_name(insulin_type)
+        base_dia_minutes = float(self._profile_iob_settings.get('iob_dia_hours', self.config.get('iob_dia_hours', 5.0))) * 60.0
+        base_peak_minutes = float(self._profile_iob_settings.get('iob_peak_minutes', self.config.get('iob_peak_minutes', 75)))
+        base_onset_minutes = float(self._profile_iob_settings.get('iob_onset_minutes', self.config.get('iob_onset_minutes', 15)))
+        factors = INSULIN_TYPE_MODEL_FACTORS.get(normalized, INSULIN_TYPE_MODEL_FACTORS['Humalog Lispro'])
+
+        dia_minutes = max(60.0, base_dia_minutes * float(factors.get('dia_scale', 1.0)))
+        peak_minutes = max(10.0, base_peak_minutes * float(factors.get('peak_scale', 1.0)))
+        onset_minutes = max(0.0, base_onset_minutes * float(factors.get('onset_scale', 1.0)))
+        onset_minutes = min(onset_minutes, dia_minutes - 10.0)
+        peak_minutes = min(peak_minutes, dia_minutes - 5.0)
+        return dia_minutes, peak_minutes, onset_minutes
+
+    def _calculate_remaining_fraction(self, elapsed_minutes, dia_minutes, peak_minutes):
+        if dia_minutes <= 0:
+            return 0.0
+
+        if elapsed_minutes <= 0:
+            return 1.0
+        if elapsed_minutes >= dia_minutes:
+            return 0.0
+        if peak_minutes <= 0:
+            peak_minutes = dia_minutes * 0.3
+        if peak_minutes >= dia_minutes:
+            peak_minutes = dia_minutes - 1.0
+
+        # Nightscout-style user parameters: DIA and peak define the activity curve.
+        if elapsed_minutes <= peak_minutes:
+            completed_fraction = (elapsed_minutes * elapsed_minutes) / (peak_minutes * dia_minutes)
+            return max(0.0, min(1.0, 1.0 - completed_fraction))
+
+        descent_den = dia_minutes - peak_minutes
+        if descent_den <= 0:
+            return 0.0
+        activity_max = 2.0 / dia_minutes
+        tail_area = (activity_max / descent_den) * (
+            dia_minutes * (elapsed_minutes - peak_minutes)
+            - ((elapsed_minutes * elapsed_minutes) - (peak_minutes * peak_minutes)) / 2.0
+        )
+        completed_fraction = (peak_minutes / dia_minutes) + tail_area
+        return max(0.0, min(1.0, 1.0 - completed_fraction))
+
+    def _calculate_iob_value(self, sample_timestamp, treatments):
+        iob_units = 0.0
+        for treatment in treatments:
+            if not isinstance(treatment, dict):
+                continue
+
+            insulin_amount = treatment.get('insulin', 0)
+            try:
+                insulin_amount = float(insulin_amount)
+            except (TypeError, ValueError):
+                continue
+
+            if insulin_amount <= 0:
+                continue
+
+            created_at = treatment.get('created_at', treatment.get('timestamp'))
+            if not created_at:
+                continue
+
+            created_utc = self._parse_ns_datetime(created_at)
+            if created_utc is None:
+                continue
+
+            treatment_local = created_utc + timedelta(hours=self.timezone_offset)
+            elapsed_minutes = (sample_timestamp - treatment_local.timestamp()) / 60.0
+            if elapsed_minutes < 0:
+                continue
+
+            insulin_type = self._get_insulin_type_for_treatment(treatment)
+            dia_minutes, peak_minutes, onset_minutes = self._get_insulin_model_params(insulin_type)
+            if elapsed_minutes <= onset_minutes:
+                fraction_remaining = 1.0
+            else:
+                effective_elapsed = elapsed_minutes - onset_minutes
+                effective_dia = max(30.0, dia_minutes - onset_minutes)
+                effective_peak = max(5.0, peak_minutes - onset_minutes)
+                effective_peak = min(effective_peak, effective_dia - 1.0)
+                fraction_remaining = self._calculate_remaining_fraction(
+                    effective_elapsed,
+                    effective_dia,
+                    effective_peak,
+                )
+            iob_units += insulin_amount * fraction_remaining
+
+        return iob_units
+
+    def _build_iob_series(self, treatments):
+        if not treatments:
+            return []
+
+        current_now = datetime.now().timestamp()
+        try:
+            x_min, x_max = self.graph.viewRange()[0]
+        except Exception:
+            time_window_seconds = self.config.get('time_window_hours', 3) * 60 * 60
+            x_min = current_now - time_window_seconds
+            x_max = current_now
+
+        sample_start = float(x_min)
+        sample_end = min(float(x_max), current_now)
+        if sample_end <= sample_start:
+            return []
+
+        sample_step_seconds = max(60, int(max(sample_end - sample_start, 60) / 120))
+        x_values = []
+        y_values = []
+
+        sample_time = sample_start
+        while sample_time < sample_end:
+            x_values.append(sample_time)
+            y_values.append(self._calculate_iob_value(sample_time, treatments))
+            sample_time += sample_step_seconds
+
+        x_values.append(sample_end)
+        y_values.append(self._calculate_iob_value(sample_end, treatments))
+        return list(zip(x_values, y_values))
+
+    def _update_iob_overlay(self):
+        if not hasattr(self, '_iob_curve') or not hasattr(self, '_iob_view'):
+            return
+
+        series = self._build_iob_series(self._treatments_cache)
+        if not series:
+            self._iob_curve.setData([], [])
+            self._iob_zero_curve.setData([], [])
+            if hasattr(self, '_iob_value_text'):
+                self._iob_value_text.setText("")
+            self._iob_view.setVisible(False)
+            return
+
+        x_values = [point[0] for point in series]
+        y_values = [point[1] for point in series]
+        max_iob = max(y_values) if y_values else 0.0
+        current_iob = y_values[-1] if y_values else 0.0
+
+        if max_iob <= 0.01 or current_iob <= 0.01:
+            self._iob_curve.setData([], [])
+            self._iob_zero_curve.setData([], [])
+            if hasattr(self, '_iob_value_text'):
+                self._iob_value_text.setText("")
+            self._iob_view.setVisible(False)
+            return
+
+        self._iob_zero_curve.setData(x_values, [0.0] * len(x_values), antialias=True)
+        self._iob_curve.setData(x_values, y_values, antialias=True)
+
+        self._iob_view.setVisible(True)
+        self._iob_view.setYRange(0, max(0.5, max_iob * 1.15), padding=0)
+        self._update_iob_view_geometry()
+
+        if hasattr(self, '_iob_value_text'):
+            iob_text = f"IOB {current_iob:.1f}U"
+            try:
+                x_max = float(self.graph.viewRange()[0][1])
+            except Exception:
+                x_max = x_values[-1]
+            right_padding = 20
+            label_x = max(x_values[0], x_max - right_padding)
+            y_top = max(0.5, max_iob * 1.15)
+            label_y = y_top * 0.72
+            self._iob_value_text.setText(iob_text)
+            self._iob_value_text.setPos(label_x, label_y)
+
     def _ensure_line_item(self, index):
         while len(self._line_items) <= index:
             curve = pg.PlotCurveItem()
@@ -1910,7 +2288,7 @@ class GlucoseWidget(QWidget):
             "fetch_remote": True,
             "entries_to_fetch": entries_to_fetch,
             "entries_cache": list(self._entries_cache),
-            "fetch_treatments": bool(self.config.get('show_treatments', True) or self.config.get('header_pills', [])),
+            "fetch_treatments": True,
             "treatments_to_fetch": int(self.config.get('treatments_to_fetch', 50)),
             "treatments_cache": list(self._treatments_cache),
         }
@@ -1997,7 +2375,7 @@ class GlucoseWidget(QWidget):
             paired_label_gap = max((y_max - y_min) * 0.12, 18)
         
         treatment_styles = {
-            'insulin': {'color': '#1E90FF', 'symbol': '▼', 'size': 12},
+            'insulin': {'color': BOLUS_COLOR, 'symbol': '▼', 'size': 12},
             'carb': {'color': '#FFA500', 'symbol': '▲', 'size': 12},
             'exercise': {'color': '#9B59B6', 'symbol': '●', 'size': 10}
         }
@@ -2204,6 +2582,7 @@ class GlucoseWidget(QWidget):
                 now = datetime.now().timestamp()
                 self.current_time_line.setPos(now)
                 self.current_max_time = now
+                self._update_iob_overlay()
                 return
 
             entries = list(self._entries_cache)
@@ -2575,6 +2954,8 @@ class GlucoseWidget(QWidget):
                 self.current_time_line.setZValue(1000)
             else:
                 self.current_time_line.setPos(now)
+
+            self._update_iob_overlay()
             
             self.current_max_time = now
             self._last_render_key = render_key
@@ -2814,6 +3195,7 @@ class GlucoseWidget(QWidget):
         """Handle range changes for both time limiting and adaptive sizing"""
         self.limit_time_range()
         self.update_adaptive_sizing()
+        self._update_iob_overlay()
         self.save_zoom_state()
     
     def get_adaptive_dot_size(self):

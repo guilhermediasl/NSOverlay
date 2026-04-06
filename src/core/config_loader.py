@@ -28,6 +28,10 @@ DEFAULT_USER_CONFIG: JsonDict = {
     "show_float_glucose": True,
     "show_treatments": True,
     "treatments_to_fetch": 50,
+    "default_insulin_type": "Humalog Lispro",
+    "iob_dia_hours": 5.0,
+    "iob_peak_minutes": 75,
+    "iob_onset_minutes": 15,
     "gradient_interpolation": True,
     "header_pills": [],
     "appearance": {},
@@ -203,6 +207,30 @@ def load_config_bundle(config_file: str) -> ConfigBundle:
             min(
                 500,
                 int(config.get("treatments_to_fetch", DEFAULT_USER_CONFIG["treatments_to_fetch"])),
+            ),
+        ),
+        "default_insulin_type": str(
+            config.get("default_insulin_type", DEFAULT_USER_CONFIG["default_insulin_type"])
+        ),
+        "iob_dia_hours": max(
+            2.0,
+            min(
+                12.0,
+                float(config.get("iob_dia_hours", DEFAULT_USER_CONFIG["iob_dia_hours"])),
+            ),
+        ),
+        "iob_peak_minutes": max(
+            30,
+            min(
+                180,
+                int(config.get("iob_peak_minutes", DEFAULT_USER_CONFIG["iob_peak_minutes"])),
+            ),
+        ),
+        "iob_onset_minutes": max(
+            0,
+            min(
+                60,
+                int(config.get("iob_onset_minutes", DEFAULT_USER_CONFIG["iob_onset_minutes"])),
             ),
         ),
         "gradient_interpolation": bool(

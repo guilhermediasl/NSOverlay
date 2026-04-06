@@ -514,6 +514,44 @@ class SettingsDialog(QDialog):
         self.gradient_chk.setChecked(bool(c.get("gradient_interpolation", True)))
         form.addRow("Color Gradient:", self.gradient_chk)
 
+        self.default_insulin_type_combo = QComboBox()
+        self.default_insulin_type_combo.setEditable(True)
+        self.default_insulin_type_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.default_insulin_type_combo.addItems([
+            "Humalog Lispro",
+            "Novolog Aspart",
+            "Fiasp",
+            "Lyumjev",
+            "Apidra Glulisine",
+        ])
+        self.default_insulin_type_combo.setCurrentText(
+            str(c.get("default_insulin_type", "Humalog Lispro"))
+        )
+        form.addRow("Default Insulin Type:", self.default_insulin_type_combo)
+
+        self.iob_dia_spin = QDoubleSpinBox()
+        self.iob_dia_spin.setRange(2.0, 12.0)
+        self.iob_dia_spin.setDecimals(1)
+        self.iob_dia_spin.setSingleStep(0.1)
+        self.iob_dia_spin.setSuffix(" h")
+        self.iob_dia_spin.setValue(float(c.get("iob_dia_hours", 5.0)))
+        self.iob_dia_spin.setToolTip("Insulin duration of action used for IOB")
+        form.addRow("IOB DIA:", self.iob_dia_spin)
+
+        self.iob_peak_spin = QSpinBox()
+        self.iob_peak_spin.setRange(30, 180)
+        self.iob_peak_spin.setSuffix(" min")
+        self.iob_peak_spin.setValue(int(c.get("iob_peak_minutes", 75)))
+        self.iob_peak_spin.setToolTip("Insulin peak time used for IOB")
+        form.addRow("IOB Peak:", self.iob_peak_spin)
+
+        self.iob_onset_spin = QSpinBox()
+        self.iob_onset_spin.setRange(0, 60)
+        self.iob_onset_spin.setSuffix(" min")
+        self.iob_onset_spin.setValue(int(c.get("iob_onset_minutes", 15)))
+        self.iob_onset_spin.setToolTip("Insulin onset delay used for IOB")
+        form.addRow("IOB Onset:", self.iob_onset_spin)
+
         return w
 
     def _build_appearance_tab(self) -> QWidget:
@@ -880,6 +918,10 @@ class SettingsDialog(QDialog):
         new_config["show_delta"] = self.show_delta_chk.isChecked()
         new_config["show_float_glucose"] = self.show_float_glucose_chk.isChecked()
         new_config["gradient_interpolation"] = self.gradient_chk.isChecked()
+        new_config["default_insulin_type"] = self.default_insulin_type_combo.currentText().strip() or "Humalog Lispro"
+        new_config["iob_dia_hours"] = self.iob_dia_spin.value()
+        new_config["iob_peak_minutes"] = self.iob_peak_spin.value()
+        new_config["iob_onset_minutes"] = self.iob_onset_spin.value()
         new_config["glucose_font_size"] = self.glucose_font_spin.value()
         new_config["time_font_size"] = self.time_font_spin.value()
         new_config["age_font_size"] = self.age_font_spin.value()

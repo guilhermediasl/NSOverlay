@@ -11,6 +11,7 @@ A lightweight always-on-top desktop widget for Windows that displays real-time g
 - Settings dialog for live customization (dot size, line width, opacity, font sizes, target range)
 - Quick Nightscout entry for insulin and carbs from the widget or tray menu
 - Right-click context menu with all options
+- Insulin-on-board curve on the graph, driven by the treatment timestamp and insulin profile
 - **System tray icon** — colour-coded icon shows the current glucose value at a glance; right-click for a quick menu, double-click to toggle the widget
 
 ![NSOverlay widget on the desktop](docs/images/widget_main.png)
@@ -75,6 +76,11 @@ cp config.json.example config.json
 | `data_point_size` | Dot size for glucose data points | `6` |
 | `show_treatments` | Plot bolus / carb / exercise markers on the graph | `true` |
 | `treatments_to_fetch` | Number of treatments to request from the API | `50` |
+| `default_insulin_type` | Default insulin type used in the log-treatment dialog and IOB fallback | `"Humalog Lispro"` |
+| `iob_dia_hours` | Per-user insulin duration of action used for IOB math | `5.0` |
+| `iob_peak_minutes` | Per-user insulin peak time used for IOB math | `75` |
+| `iob_onset_minutes` | Per-user insulin onset delay used for IOB math | `15` |
+| `insulinType` on treatments | Stored with new insulin entries so the IOB curve can use the selected insulin profile | Humalog Lispro |
 | `gradient_interpolation` | Colour-gradient from yellow→red as glucose moves away from range | `true` |
 | `appearance.graph_background_opacity` | Graph background opacity 0–100 | `100` |
 | `appearance.label_pill_opacity` | Header label pill opacity 0–100 | `40` |
@@ -126,6 +132,25 @@ When `show_treatments` is `true`, the following `eventType` values are plotted d
 | Carb Correction / Carbs | `▲<amount>g` in orange |
 | Exercise | coloured horizontal band with label |
 | **Basal Injection** | `▼<amount>U` in pastel cyan |
+
+### Insulin on board
+
+NSOverlay also plots an IOB curve for fast insulin. The curve starts at the moment an insulin treatment is logged and decays according to the selected insulin profile. The first supported profile is **Humalog Lispro**.
+
+When you log insulin from the dialog, you can choose the insulin type. New entries save that choice in the treatment payload as `insulinType`, and the graph uses it when building the IOB line. Older entries without a type default to Humalog Lispro for now.
+
+IOB computation is now configurable with Nightscout-style per-user settings:
+
+- `iob_dia_hours` controls duration of action.
+- `iob_peak_minutes` controls peak activity timing.
+- `iob_onset_minutes` controls onset delay before insulin starts decaying.
+- `default_insulin_type` defines the default type in the treatment dialog and the fallback when a treatment has no `insulinType`.
+
+Priority order used at runtime:
+
+1. Insulin type on the treatment event (`insulinType`)
+2. Active Nightscout profile values (from `profile.json`)
+3. Local `config.json` values (fallback)
 
 <p align="center">
   <img src="docs/images/settings_dialog.png" width="48%" alt="Settings – Graph tab" />

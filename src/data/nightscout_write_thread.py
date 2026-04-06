@@ -21,6 +21,7 @@ class TreatmentWriteRequest:
     api_secret: str
     event_type: str
     insulin: float = 0.0
+    insulin_type: str = "Humalog Lispro"
     carbs: int = 0
     notes: str = ""
     entered_by: str = "NSOverlay"
@@ -34,6 +35,9 @@ class TreatmentWriteRequest:
         }
         if self.insulin > 0:
             payload["insulin"] = round(float(self.insulin), 2)
+            insulin_type = self.insulin_type.strip()
+            if insulin_type:
+                payload["insulinType"] = insulin_type
         if self.carbs > 0:
             payload["carbs"] = int(self.carbs)
         notes = self.notes.strip()
