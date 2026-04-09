@@ -445,43 +445,79 @@ static bool fetchNightscout() {
 // =================================================================
 // Graph-mode rendering helper
 // =================================================================
-// Draws the compact header + glucose history scatter plot.
+// Draws an NSOverlay-inspired layout:
+//   Header: left column (clock + age + WiFi/NS) | vertical rule | right (glucose + arrow + delta)
+//   Graph:  full-width scatter plot with dynamic Y scaling
 // Called from renderDisplay() when SHOW_GRAPH = 1.
 // Accepts an LGFXBase& so it works with both the sprite canvas and
 // direct-LCD fallback — the same pattern used by drawTrendArrow.
 #if SHOW_GRAPH
 static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
-    const int CORNER_MARGIN = 8;
 
-    // ── Layout ─────────────────────────────────────────────────────
-    // Row 1 (y≈10) : clock (left)  +  WiFi / NS status (right)
-    // Row 2 (y≈38) : glucose number + trend arrow + delta (centred)
-    // Row 3 (y≈60) : age of reading (right-aligned) + stale "!" (left)
-    // Row 4        : separator line
-    // Graph area   : remaining vertical space above X-axis labels
-    // X-axis row   : hour labels at the very bottom
-    const int Y_STATUS   = 11;   // middle datum for row 1
-    const int Y_GLUCOSE  = 37;   // middle datum for row 2
-    const int Y_AGE      = 59;   // middle datum for row 3
-    const int GRAPH_TOP  = 70;   // top pixel of the plot area
-    // Leave 14 px at the bottom for X-axis tick labels (Font0 ≈ 8 px)
-    const int GRAPH_BOTTOM = H - 14;
-    const int GRAPH_LEFT   = 26; // left margin for Y-axis labels ("180 " in Font0)
-    const int GRAPH_RIGHT  = W - 3;
+    // ── Layout constants ───────────────────────────────────────────
+    // Header occupies the top HEADER_H pixels.  Everything below is graph.
+    const int HEADER_H   = 54;  // total header height
+    const int SEP_X      = 88;  // x of vertical rule separating left/right header columns
+    const int MARGIN     = 7;   // horizontal inset from left/right screen edges
+    // Left column  : x in [MARGIN .. SEP_X-3]
+    // Right column : x in [SEP_X+4 .. W-MARGIN]
+    const int L_X        = MARGIN;
+    const int R_X        = SEP_X + 5;   // left edge of the right column
+    const int R_CX       = (R_X + W - MARGIN) / 2;  // horizontal centre of right column
+
+    // Graph area (below header separator)
+    const int GRAPH_TOP    = HEADER_H + 3;
+    const int GRAPH_BOTTOM = H - 13;          // 13 px for X-axis labels
+    const int GRAPH_LEFT   = 24;              // left margin for Y-axis labels
+    const int GRAPH_RIGHT  = W - 2;
     const int GRAPH_H      = GRAPH_BOTTOM - GRAPH_TOP;
     const int GRAPH_W      = GRAPH_RIGHT - GRAPH_LEFT;
 
-    // Y mapping: glucose value → pixel row inside the plot area.
-    // We clamp to [SGV_MIN, SGV_MAX] so out-of-range readings still appear.
-    const int SGV_MIN = 40;
-    const int SGV_MAX = 320;
+    // ── Dynamic Y-axis range (mirrors NSOverlay _compute_y_range) ──
+    // Anchor: TARGET_LOW and TARGET_HIGH must always be visible.
+    // Include all historical readings so any out-of-range value scrolls in.
+    int dataMin = TARGET_HIGH;
+    int dataMax = TARGET_LOW;
+    for (int i = 0; i < g_graphHistoryLen; i++) {
+        int sv = g_graphHistory[i].sgv;
+        if (sv > 0) {
+            if (sv < dataMin) dataMin = sv;
+            if (sv > dataMax) dataMax = sv;
+        }
+    }
+    // Expand to always include the target boundaries
+    if (TARGET_LOW  < dataMin) dataMin = TARGET_LOW;
+    if (TARGET_HIGH > dataMax) dataMax = TARGET_HIGH;
+
+    // 15 % padding (minimum 20 units) so values don't sit on the edge
+    int glucRange = dataMax - dataMin;
+    int pad       = glucRange * 15 / 100;
+    if (pad < 20) pad = 20;
+
+    int yAxisMin = dataMin - pad;
+    int yAxisMax = dataMax + pad;
+
+    // Clamp to physiological limits
+    if (yAxisMin < 40)  yAxisMin = 40;
+    if (yAxisMax > 400) yAxisMax = 400;
+
+    // Ensure at least a 100-unit window so the graph is never too zoomed in
+    if (yAxisMax - yAxisMin < 100) {
+        int center = (yAxisMin + yAxisMax) / 2;
+        yAxisMin = center - 50;
+        yAxisMax = center + 50;
+        if (yAxisMin < 40)  { yAxisMin = 40;  yAxisMax = 140; }
+        if (yAxisMax > 400) { yAxisMax = 400; yAxisMin = 300; }
+    }
+
+    // Y mapping: glucose value → pixel row (clamped to axis range)
     auto sgvToY = [&](int sgv) -> int {
-        if (sgv < SGV_MIN) sgv = SGV_MIN;
-        if (sgv > SGV_MAX) sgv = SGV_MAX;
-        return GRAPH_TOP + (SGV_MAX - sgv) * GRAPH_H / (SGV_MAX - SGV_MIN);
+        if (sgv < yAxisMin) sgv = yAxisMin;
+        if (sgv > yAxisMax) sgv = yAxisMax;
+        return GRAPH_TOP + (yAxisMax - sgv) * GRAPH_H / (yAxisMax - yAxisMin);
     };
 
-    // Current time
+    // Current time & X mapping
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     int64_t nowMs    = g_ntpSynced
@@ -490,134 +526,134 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     int64_t windowMs = (int64_t)GRAPH_MINUTES * 60000LL;
     int64_t oldestMs = nowMs - windowMs;
 
-    // X mapping: Unix-ms timestamp → pixel column inside the plot area.
     auto msToX = [&](int64_t ms) -> int {
         if (windowMs <= 0) return GRAPH_LEFT;
         return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / windowMs);
     };
 
-    // ── Row 1: clock (left) + WiFi/NS indicators (right) ──────────
+    // ── Header: right column — glucose (hero element) ─────────────
+    // Draw this first so the left column and rule paint on top
+    // giving a clean visual layering in the direct-LCD fallback path.
+    if (!g_reading.valid) {
+        g.setFont(&FONT_MEDIUM);
+        g.setTextSize(1);
+        g.setTextColor(COLOR_ERROR);
+        g.setTextDatum(lgfx::middle_center);
+        g.drawString(g_error.length() > 0 ? g_error : "Aguarde...", R_CX, HEADER_H / 2);
+    } else {
+        uint16_t col = glucoseColor(g_reading.sgv);
+
+        // Large glucose number — left-aligned from R_X, vertically centred
+        // at y = HEADER_H/2.  Typical "XXX" width at FONT_LARGE ≈ 45 px.
+        g.setFont(&FONT_LARGE);
+        g.setTextSize(1);
+        g.setTextColor(col);
+        g.setTextDatum(lgfx::middle_left);
+        g.drawString(String(g_reading.sgv), R_X, HEADER_H / 2 - 4);
+
+        // Trend arrow — to the right of the glucose number
+        // FONT_LARGE char width ~14 px/pt → "XXX" ≈ 48 px → arrow starts at R_X+52
+        int arrowCX = R_X + 52;
+        drawTrendArrow(g, g_reading.direction, arrowCX, HEADER_H / 2 - 4, col, 14);
+
+        // Delta — right of arrow
+        String deltaStr = (g_reading.delta >= 0 ? "+" : "") + String(g_reading.delta);
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        g.setTextColor(col);
+        g.setTextDatum(lgfx::middle_left);
+        g.drawString(deltaStr, arrowCX + 17, HEADER_H / 2 - 4);
+    }
+
+    // ── Header: left column — clock / age / WiFi+NS ───────────────
+    // Clock (FONT_SMALL, top of column)
     String clk = clockString();
     if (clk.length() > 0) {
         g.setFont(&FONT_SMALL);
         g.setTextSize(1);
         g.setTextColor(COLOR_CLOCK);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(clk, CORNER_MARGIN, Y_STATUS);
+        g.drawString(clk, L_X, 14);
     }
+
+    // Age of reading (Font0, middle of column)
+    if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
+        int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
+        bool stale = (ageMin >= 15);
+        String age = ageLabel(g_reading.dateMs);
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
+        g.setTextDatum(lgfx::middle_left);
+        g.drawString(age, L_X, 29);
+        if (stale) {
+            g.setTextColor(COLOR_STALE_WARN);
+            g.drawString("! OLD", L_X, 40);
+        }
+    }
+
+    // WiFi + NS status (Font0, bottom of column)
     {
         bool wifiOk = (WiFi.status() == WL_CONNECTED);
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
-        // "NS:OK" or "NS:ERR" — rightmost
-        g.setTextDatum(lgfx::middle_right);
-        g.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(g_reading.valid ? "NS:OK" : "NS:ERR", W - CORNER_MARGIN, Y_STATUS);
-        // "WiFi" indicator just to the left of NS label
-        g.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(wifiOk ? "WiFi " : "WiFi!", W - CORNER_MARGIN - 42, Y_STATUS);
-    }
-
-    // ── Row 2: glucose value + trend arrow + delta ─────────────────
-    if (!g_reading.valid) {
-        g.setFont(&FONT_MEDIUM);
-        g.setTextColor(COLOR_ERROR);
-        g.setTextDatum(lgfx::middle_center);
-        g.drawString(g_error.length() > 0 ? g_error : "Aguarde...", W / 2, Y_GLUCOSE);
-    } else {
-        uint16_t col = glucoseColor(g_reading.sgv);
-
-        // Glucose: FONT_LARGE centred slightly left of midpoint so arrow + delta fit.
-        // Group visual centre ≈ W/2.  Estimated widths at FONT_LARGE:
-        //   glucose "XXX" ≈ 45 px → anchor middle_center at W/2 - 38
-        //   arrow   sz=14 → 28 px wide → centre at W/2 + 3
-        //   delta "+XX"   ≈ 30 px → middle_left at W/2 + 18
-        g.setFont(&FONT_LARGE);
-        g.setTextColor(col);
-        g.setTextDatum(lgfx::middle_center);
-        g.drawString(String(g_reading.sgv), W / 2 - 38, Y_GLUCOSE);
-
-        drawTrendArrow(g, g_reading.direction, W / 2 + 3, Y_GLUCOSE, col, 14);
-
-        String deltaStr = (g_reading.delta >= 0 ? "+" : "") + String(g_reading.delta);
-        g.setFont(&FONT_SMALL);
-        g.setTextColor(col);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(deltaStr, W / 2 + 19, Y_GLUCOSE);
+        g.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
+        g.drawString(wifiOk ? "WiFi" : "WiFi!", L_X, 44);
+        g.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
+        g.drawString(g_reading.valid ? " NS" : " NS!", L_X + 26, 44);
     }
 
-    // ── Row 3: age of reading + stale alert ────────────────────────
-    if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
-        String age = ageLabel(g_reading.dateMs);
-        int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
-        bool stale = (ageMin >= 15);
-        g.setFont(&lgfx::fonts::Font0);
-        g.setTextSize(1);
-        g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
-        g.setTextDatum(lgfx::middle_right);
-        g.drawString(age, W - CORNER_MARGIN, Y_AGE);
-        if (stale) {
-            // Compact stale alert on the left — no space for full banner in graph mode
-            g.setTextColor(COLOR_STALE_WARN);
-            g.setTextDatum(lgfx::middle_left);
-            g.drawString("! OLD", CORNER_MARGIN, Y_AGE);
-        }
-    }
+    // ── Header: vertical rule ──────────────────────────────────────
+    g.drawFastVLine(SEP_X, 4, HEADER_H - 8, COLOR_GRAPH_BORDER);
 
-    // ── Separator between header and graph ─────────────────────────
-    g.drawFastHLine(CORNER_MARGIN, GRAPH_TOP - 3,
-                    W - CORNER_MARGIN * 2, COLOR_GRAPH_BORDER);
+    // ── Header: horizontal separator ──────────────────────────────
+    g.drawFastHLine(0, HEADER_H, W, COLOR_GRAPH_BORDER);
 
-    // ── Graph: coloured zone fills (low / target / high) ───────────
+    // ── Graph: optional coloured zone fills ────────────────────────
+    // Disable by setting GRAPH_ZONE_FILLS 0 in config.h.
+#if GRAPH_ZONE_FILLS
     {
         int yHigh = sgvToY(TARGET_HIGH);
         int yLow  = sgvToY(TARGET_LOW);
-        int yTop  = sgvToY(SGV_MAX);      // = GRAPH_TOP
-        int yBot  = sgvToY(SGV_MIN);      // = GRAPH_BOTTOM
 
-        // Low zone (below TARGET_LOW): faint red
-        g.fillRect(GRAPH_LEFT, yLow, GRAPH_W, yBot - yLow, COLOR_GRAPH_LOW_FILL);
-        // Target zone (TARGET_LOW … TARGET_HIGH): faint green
+        // Low zone (below TARGET_LOW): only if TARGET_LOW is above the axis minimum
+        if (TARGET_LOW > yAxisMin) {
+            g.fillRect(GRAPH_LEFT, yLow, GRAPH_W, GRAPH_BOTTOM - yLow, COLOR_GRAPH_LOW_FILL);
+        }
+        // Target zone
         g.fillRect(GRAPH_LEFT, yHigh, GRAPH_W, yLow - yHigh, COLOR_GRAPH_TARGET_FILL);
-        // High zone (above TARGET_HIGH): faint orange
-        g.fillRect(GRAPH_LEFT, yTop, GRAPH_W, yHigh - yTop, COLOR_GRAPH_HIGH_FILL);
-
-        // Boundary lines — solid lines at this pixel scale are visually sufficient
-        g.drawFastHLine(GRAPH_LEFT, yHigh, GRAPH_W, COLOR_GRAPH_TARGET_LINE);
-        g.drawFastHLine(GRAPH_LEFT, yLow,  GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+        // High zone (above TARGET_HIGH): only if TARGET_HIGH is below the axis maximum
+        if (TARGET_HIGH < yAxisMax) {
+            g.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_W, yHigh - GRAPH_TOP, COLOR_GRAPH_HIGH_FILL);
+        }
     }
+#endif  // GRAPH_ZONE_FILLS
 
-    // ── Graph: Y-axis labels ────────────────────────────────────────
+    // ── Graph: target boundary lines ──────────────────────────────
+    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_LOW),  GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+
+    // ── Graph: Y-axis labels (TARGET_LOW and TARGET_HIGH only) ─────
     g.setFont(&lgfx::fonts::Font0);
     g.setTextSize(1);
     g.setTextDatum(lgfx::middle_right);
-    // Target boundaries (brighter)
     g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
-    g.drawString(String(TARGET_HIGH), GRAPH_LEFT - 2, sgvToY(TARGET_HIGH));
-    g.drawString(String(TARGET_LOW),  GRAPH_LEFT - 2, sgvToY(TARGET_LOW));
-    // Top / bottom bounds (dimmer)
-    g.setTextColor(COLOR_GRAPH_AXIS);
-    g.drawString("300", GRAPH_LEFT - 2, sgvToY(300));
-    g.drawString(" 40", GRAPH_LEFT - 2, sgvToY(40));
+    g.drawString(String(TARGET_HIGH), GRAPH_LEFT - 1, sgvToY(TARGET_HIGH));
+    g.drawString(String(TARGET_LOW),  GRAPH_LEFT - 1, sgvToY(TARGET_LOW));
 
-    // ── Graph: graph area border ────────────────────────────────────
-    g.drawRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_W, GRAPH_H, COLOR_GRAPH_BORDER);
-
-    // ── Graph: X-axis hour ticks + labels ──────────────────────────
+    // ── Graph: X-axis hour ticks + labels ─────────────────────────
     if (g_ntpSynced && nowMs > 0) {
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
         g.setTextDatum(lgfx::top_center);
-        const int64_t hourMs = 3600000LL;
-        // First whole hour after the left edge of the window
+        const int64_t hourMs  = 3600000LL;
         int64_t firstHour = (oldestMs / hourMs + 1) * hourMs;
         for (int64_t t = firstHour; t <= nowMs + 60000LL; t += hourMs) {
             int x = msToX(t);
             if (x > GRAPH_LEFT + 2 && x < GRAPH_RIGHT - 2) {
-                // Tick
                 g.drawFastVLine(x, GRAPH_BOTTOM, 4, COLOR_GRAPH_AXIS);
-                // Label
                 time_t secs = (time_t)(t / 1000LL);
                 struct tm ti;
                 localtime_r(&secs, &ti);
@@ -628,9 +664,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         }
     }
 
-    // ── Graph: glucose scatter dots ─────────────────────────────────
-    // Iterate oldest → newest (index g_graphHistoryLen-1 → 0).
-    // Paint older dots first so the latest reading renders on top.
+    // ── Graph: scatter dots (oldest → newest so latest renders on top) ─
     for (int i = g_graphHistoryLen - 1; i >= 0; i--) {
         int     sgv  = g_graphHistory[i].sgv;
         int64_t msTs = g_graphHistory[i].dateMs;
@@ -645,7 +679,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 
         uint16_t dotColor = glucoseColor(sgv);
         if (i == 0) {
-            // Latest reading: larger dot + outer ring for emphasis
+            // Latest reading: larger filled dot + outer ring for emphasis
             g.fillCircle(px, py, 5, dotColor);
             g.drawCircle(px, py, 7, dotColor);
         } else {

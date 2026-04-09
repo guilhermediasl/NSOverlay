@@ -103,17 +103,26 @@
 // (one entry every 5 min) so a full trend line is visible on screen.
 // The graph shows:
 //   • Coloured scatter dots (red / orange / green) per reading
-//   • Shaded target zone between TARGET_LOW and TARGET_HIGH
-//   • Dashed boundary lines at TARGET_LOW and TARGET_HIGH
+//   • Optional shaded zone fills between target lines (GRAPH_ZONE_FILLS)
+//   • Boundary lines at TARGET_LOW and TARGET_HIGH
+//   • Dynamic Y axis: always shows the full target range; expands
+//     automatically if a reading falls outside
 //   • Hour-boundary tick marks with HH:MM labels on the X axis
 //   • The latest reading highlighted with a larger dot + outer ring
+//   • NSOverlay-inspired header: clock + age on the left, large
+//     glucose number + trend arrow on the right
 //
 // GRAPH_MINUTES – time window visible in the graph.
 //   Must be a multiple of 5.  Recommended values: 120, 180, 240.
 //   Larger windows need more heap for the JSON response; 240 is the
 //   practical maximum on the ESP32C3 with WiFi active.
-#define SHOW_GRAPH      1
-#define GRAPH_MINUTES   180
+//
+// GRAPH_ZONE_FILLS – set to 1 (default) to paint faint coloured
+//   backgrounds in the low / target / high zones, or 0 for a clean
+//   black-background graph with only the boundary lines shown.
+#define SHOW_GRAPH       1
+#define GRAPH_MINUTES    180
+#define GRAPH_ZONE_FILLS 1
 
 // ---- Display colours --------------------------------------------
 // All colour constants are 16-bit RGB-565 values.

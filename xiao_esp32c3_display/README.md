@@ -29,27 +29,26 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 ### Graph mode (`SHOW_GRAPH 1`, default)
 
 ```
-┌──────────────────────────────────────┐
-│ 16:30                  WiFi NS:OK   │  ← clock + status (row 1)
-│       133  →  +1       2 min atras  │  ← glucose + trend (row 2-3)
-│ ─────────────────────────────────── │  ← separator
-│                           300       │
-│  ● ● ● ●    ● ● ●                  │  ← coloured scatter dots
-│           ● ●      ● ● ● ● ● ● ●  │     green = in-range
-│  ────────────────────────────── 180 │  ← TARGET_HIGH solid line
-│  [target zone shaded green]         │
-│  ──────────────────────────────  70 │  ← TARGET_LOW solid line
-│                              40     │
-│       |           |           |     │  ← hour ticks
-│     14:00        15:00      16:00   │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│ 16:30   │    128  →  +3                 │  ← NSOverlay-style header
+│ 2m atras│                               │    left: clock + age + status
+│ WiFi NS │                               │    right: large glucose + arrow
+├──────────────────────────────────────────┤  ← separator
+│  ●  ● ●●   ●   ●●●                     │
+│              ●●       ● ● ● ● ● ●   ●  │  ← coloured dots
+│  ────────────────────────────── 180     │  ← TARGET_HIGH line
+│  [optional target zone fill]            │
+│  ──────────────────────────────  70     │  ← TARGET_LOW line
+│       |           |           |         │  ← hour ticks
+│     14:00        15:00      16:00       │
+└──────────────────────────────────────────┘
 ```
 
 * **Green** dot = in target range · **Orange** = above target · **Red** = below target
-* **Latest reading** is drawn with a larger dot and an outer ring
-* **Stale-data** (≥ 15 min old): age label turns yellow; compact "! OLD" appears on the left
-* Green shaded zone = target range; dim-red zone = below target; dim-orange zone = above target
-* Solid boundary lines mark `TARGET_LOW` and `TARGET_HIGH`
+* **Latest reading** is drawn with a larger dot and an outer ring for immediate visibility
+* **Dynamic Y axis** — always shows the full `TARGET_LOW`…`TARGET_HIGH` range at the borders; expands automatically if any reading falls outside (mirrors NSOverlay's adaptive scaling)
+* **Stale-data** (≥ 15 min old): age label turns yellow; "! OLD" badge appears in the left column
+* Zone background fills controlled by `GRAPH_ZONE_FILLS` — set to `0` for a clean black-background graph
 
 ---
 
@@ -125,6 +124,7 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `REFRESH_INTERVAL_MS` | How often to poll Nightscout (default 60 000 ms) |
 | `SHOW_GRAPH` | `1` (default) = graph mode · `0` = simple large-value layout |
 | `GRAPH_MINUTES` | Time window shown in graph mode (default `180` = 3 h) |
+| `GRAPH_ZONE_FILLS` | `1` (default) = draw faint coloured zone backgrounds · `0` = clean black background |
 | `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
 | `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
 
