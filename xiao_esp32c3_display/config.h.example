@@ -179,6 +179,22 @@
 #define COLOR_GRAPH_AXIS_LABEL   RGB565(120, 120, 120)   // X / Y axis text
 #define COLOR_GRAPH_BORDER       RGB565( 50,  50,  50)   // graph area border
 
+// Hour marks on X axis:
+// 0 = short tick at the bottom (default)
+// 1 = full-height vertical line at each hour mark
+#define GRAPH_HOUR_LINES_FULL_HEIGHT 0
+#define COLOR_GRAPH_HOUR_LINE   RGB565( 70,  70,  70)   // used when GRAPH_HOUR_LINES_FULL_HEIGHT = 1
+
+// Dashed-lane pattern (pixels): bigger GAP means more space between dashes.
+#define GRAPH_10MIN_DASH_LEN 2
+#define GRAPH_10MIN_GAP_LEN  7
+#define GRAPH_HOUR_DASH_LEN  4
+#define GRAPH_HOUR_GAP_LEN   8
+
+// Dashed style for target boundary lines (high/low glucose).
+#define GRAPH_TARGET_DASH_LEN 6
+#define GRAPH_TARGET_GAP_LEN  8
+
 // Splash screen
 #define COLOR_SPLASH_TITLE  TFT_WHITE
 #define COLOR_SPLASH_ACCENT RGB565(100, 210, 230)   // cyan — subtitle / boot status

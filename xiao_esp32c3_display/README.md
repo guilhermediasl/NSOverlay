@@ -39,15 +39,17 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 │  ────────────────────────────── 180     │  ← TARGET_HIGH line
 │  [optional target zone fill]            │
 │  ──────────────────────────────  70     │  ← TARGET_LOW line
-│       |           |           |         │  ← hour ticks
-│     14:00        15:00      16:00       │
+│     |    |    |    |    |    |         │  ← 10-minute lines
+│   14:00 14:10 14:20 14:30 14:40 14:50   │
 └──────────────────────────────────────────┘
 ```
 
 * **Green** dot = in target range · **Orange** = above target · **Red** = below target
 * **Latest reading** is drawn with a larger dot and an outer ring for immediate visibility
 * **Dynamic Y axis** — always shows the full `TARGET_LOW`…`TARGET_HIGH` range at the borders; expands automatically if any reading falls outside (mirrors NSOverlay's adaptive scaling)
-* **Stale-data** (≥ 15 min old): age label turns yellow; "! OLD" badge appears in the left column
+* **Time axis** — dashed vertical lines appear every 10 minutes, with `HH:MM` labels on the axis; labels are automatically skipped when they would overlap
+* **Delta** is computed from the current reading minus the interpolated glucose value exactly 5 minutes earlier, matching the Windows NSOverlay app
+* **Stale-data** (≥ 15 min old): age label turns yellow; "! DADO ANTIGO !" badge appears in the left column
 * Zone background fills controlled by `GRAPH_ZONE_FILLS` — set to `0` for a clean black-background graph
 
 ---
@@ -127,6 +129,10 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `GRAPH_ENTRY_INTERVAL` | Expected gap between CGM readings in minutes (default `5`; set to `1` if your Nightscout logs every minute) |
 | `GRAPH_ZONE_FILLS` | `1` (default) = draw faint coloured zone backgrounds · `0` = clean black background |
 | `GRAPH_HGRID_STEP` | Glucose interval (mg/dL) between horizontal grid lines (default `50`) |
+| `GRAPH_HOUR_LINES_FULL_HEIGHT` | `1` = draw full-height dashed hour guides · `0` = keep short hour ticks |
+| `GRAPH_10MIN_DASH_LEN` / `GRAPH_10MIN_GAP_LEN` | Dash pattern for 10-minute vertical lines |
+| `GRAPH_HOUR_DASH_LEN` / `GRAPH_HOUR_GAP_LEN` | Dash pattern for hour guides when full-height mode is enabled |
+| `GRAPH_TARGET_DASH_LEN` / `GRAPH_TARGET_GAP_LEN` | Dash pattern for `TARGET_LOW` and `TARGET_HIGH` boundary lines |
 | `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
 | `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
 
@@ -165,9 +171,9 @@ All `COLOR_*` constants in `config.h` accept:
 | Constant | Default | Used for |
 |---|---|---|
 | `COLOR_BACKGROUND` | `TFT_BLACK` | Screen background |
-| `COLOR_GLUCOSE_LOW` | `RGB565(220, 60, 60)` | Glucose value when below `TARGET_LOW` |
-| `COLOR_GLUCOSE_HIGH` | `RGB565(255, 150, 0)` | Glucose value when above `TARGET_HIGH` |
-| `COLOR_GLUCOSE_OK` | `RGB565(60, 210, 80)` | Glucose value when in target range |
+| `COLOR_GLUCOSE_LOW` | `RGB565(255, 68, 68)` | Glucose value when below `TARGET_LOW` |
+| `COLOR_GLUCOSE_HIGH` | `RGB565(255, 136, 0)` | Glucose value when above `TARGET_HIGH` |
+| `COLOR_GLUCOSE_OK` | `RGB565(0, 212, 170)` | Glucose value when in target range |
 | `COLOR_CLOCK` | `TFT_WHITE` | Clock text (top row) |
 | `COLOR_AGE_NORMAL` | `RGB565(210, 210, 210)` | Age-of-reading label when data is fresh |
 | `COLOR_AGE_STALE` | `TFT_YELLOW` | Age-of-reading label when data is ≥ 15 min old |
@@ -179,11 +185,11 @@ All `COLOR_*` constants in `config.h` accept:
 | `COLOR_SPLASH_ACCENT` | `RGB565(100, 210, 230)` | Cyan subtitle on the boot splash |
 | `COLOR_SPLASH_DIM` | `RGB565(150, 150, 150)` | Grey status message on the boot splash |
 | `COLOR_GRAPH_TARGET_FILL` | `RGB565(0, 40, 0)` | Dark green fill for the target zone in the graph |
-| `COLOR_GRAPH_HIGH_LINE` | `RGB565(255, 150, 0)` | Orange line at `TARGET_HIGH` boundary |
-| `COLOR_GRAPH_LOW_LINE` | `RGB565(220, 60, 60)` | Red line at `TARGET_LOW` boundary |
+| `COLOR_GRAPH_HIGH_LINE` | `RGB565(170, 100, 0)` | Dimmed orange line at `TARGET_HIGH` boundary |
+| `COLOR_GRAPH_LOW_LINE` | `RGB565(150, 40, 40)` | Dimmed red line at `TARGET_LOW` boundary |
 | `COLOR_GRAPH_LOW_FILL` | `RGB565(50, 0, 0)` | Dark red fill below the low-target zone in the graph |
 | `COLOR_GRAPH_HIGH_FILL` | `RGB565(50, 25, 0)` | Dark orange fill above the high-target zone in the graph |
-| `COLOR_GRAPH_10MIN_LINE` | `RGB565(30, 30, 30)` | Very dim vertical line every 10 minutes on the graph |
+| `COLOR_GRAPH_10MIN_LINE` | `RGB565(65, 65, 65)` | Vertical line every 10 minutes on the graph |
 | `COLOR_GRAPH_HGRID_LINE` | `RGB565(35, 35, 35)` | Very dim horizontal line every `GRAPH_HGRID_STEP` mg/dL |
 | `COLOR_GRAPH_AXIS` | `RGB565(90, 90, 90)` | Axis lines and tick marks |
 | `COLOR_GRAPH_AXIS_LABEL` | `RGB565(120, 120, 120)` | X / Y axis text labels |

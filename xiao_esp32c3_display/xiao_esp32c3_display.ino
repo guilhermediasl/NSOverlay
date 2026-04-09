@@ -71,6 +71,40 @@
 // ---- Project config ---------------------------------------------
 #include "config.h"
 
+// Optional graph-hour line settings.
+// Keep backward compatibility when older config.h files do not define these.
+#ifndef GRAPH_HOUR_LINES_FULL_HEIGHT
+#define GRAPH_HOUR_LINES_FULL_HEIGHT 0
+#endif
+
+#ifndef COLOR_GRAPH_HOUR_LINE
+#define COLOR_GRAPH_HOUR_LINE COLOR_GRAPH_AXIS
+#endif
+
+#ifndef GRAPH_10MIN_DASH_LEN
+#define GRAPH_10MIN_DASH_LEN 2
+#endif
+
+#ifndef GRAPH_10MIN_GAP_LEN
+#define GRAPH_10MIN_GAP_LEN 7
+#endif
+
+#ifndef GRAPH_HOUR_DASH_LEN
+#define GRAPH_HOUR_DASH_LEN 4
+#endif
+
+#ifndef GRAPH_HOUR_GAP_LEN
+#define GRAPH_HOUR_GAP_LEN 8
+#endif
+
+#ifndef GRAPH_TARGET_DASH_LEN
+#define GRAPH_TARGET_DASH_LEN 6
+#endif
+
+#ifndef GRAPH_TARGET_GAP_LEN
+#define GRAPH_TARGET_GAP_LEN 8
+#endif
+
 // ---- Font size variants (resolved from DISPLAY_FONT in config.h) -
 #if   DISPLAY_FONT == FONT_FAMILY_FREE_SANS_BOLD
 #  define FONT_LARGE   lgfx::fonts::FreeSansBold18pt7b
@@ -274,6 +308,34 @@ static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
     }
 }
 
+// Draw a vertical dashed line with configurable dash and gap lengths.
+static void drawDashedVLine(lgfx::LGFXBase& g, int x, int y, int h,
+                            uint16_t col, int dashLen, int gapLen) {
+    if (h <= 0) return;
+    if (dashLen < 1) dashLen = 1;
+    if (gapLen < 0) gapLen = 0;
+
+    int yEnd = y + h;
+    for (int cy = y; cy < yEnd; cy += (dashLen + gapLen)) {
+        int seg = min(dashLen, yEnd - cy);
+        g.drawFastVLine(x, cy, seg, col);
+    }
+}
+
+// Draw a horizontal dashed line with configurable dash and gap lengths.
+static void drawDashedHLine(lgfx::LGFXBase& g, int x, int y, int w,
+                            uint16_t col, int dashLen, int gapLen) {
+    if (w <= 0) return;
+    if (dashLen < 1) dashLen = 1;
+    if (gapLen < 0) gapLen = 0;
+
+    int xEnd = x + w;
+    for (int cx = x; cx < xEnd; cx += (dashLen + gapLen)) {
+        int seg = min(dashLen, xEnd - cx);
+        g.drawFastHLine(cx, y, seg, col);
+    }
+}
+
 // 16-bit colour based on glucose level.
 static uint16_t glucoseColor(int sgv) {
     if (sgv > 0 && sgv < TARGET_LOW)   return COLOR_GLUCOSE_LOW;
@@ -306,6 +368,51 @@ static String clockString() {
     char buf[6];
     strftime(buf, sizeof(buf), "%H:%M", &t);
     return String(buf);
+}
+
+// Match NSOverlay Python delta logic:
+// interpolate the glucose value exactly 5 minutes before the latest reading,
+// then compute current - interpolated_value.
+static bool interpolateGlucose5MinAgo(JsonArray arr, int currentSgv,
+                                      int64_t currentDateMs, int& deltaOut) {
+    if (arr.size() < 2) return false;
+
+    const int64_t fiveMinMs = 5LL * 60LL * 1000LL;
+    int64_t targetTime = currentDateMs - fiveMinMs;
+
+    int64_t oldestTime = arr[arr.size() - 1]["date"] | (int64_t)0;
+    if (targetTime < oldestTime) return false;
+
+    if (targetTime >= currentDateMs) {
+        deltaOut = 0;
+        return true;
+    }
+
+    // Nightscout returns newest-first, so walk from oldest -> newest to find
+    // the interval that brackets the target time.
+    for (size_t i = arr.size() - 1; i > 0; --i) {
+        int64_t t1 = arr[i]["date"] | (int64_t)0;
+        int64_t t2 = arr[i - 1]["date"] | (int64_t)0;
+        if (t1 <= targetTime && targetTime <= t2) {
+            int v1 = arr[i]["sgv"] | 0;
+            int v2 = arr[i - 1]["sgv"] | 0;
+
+            if (t2 == t1) {
+                deltaOut = currentSgv - v1;
+                return true;
+            }
+
+            double ratio = (double)(targetTime - t1) / (double)(t2 - t1);
+            double interpolatedValue = v1 + ratio * (v2 - v1);
+            int glucose5MinAgo = (int)(interpolatedValue >= 0.0
+                                        ? interpolatedValue + 0.5
+                                        : interpolatedValue - 0.5);
+            deltaOut = currentSgv - glucose5MinAgo;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // =================================================================
@@ -411,7 +518,10 @@ static bool fetchNightscout() {
         r.valid     = (r.sgv > 0);
 
         if (arr.size() >= 2) {
-            r.delta = r.sgv - (int)(arr[1]["sgv"] | 0);
+            int delta = 0;
+            if (interpolateGlucose5MinAgo(arr, r.sgv, r.dateMs, delta)) {
+                r.delta = delta;
+            }
         }
 
         g_reading = r;
@@ -468,7 +578,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     const int HEADER_H   = 56;   // total header height
     const int SEP_X      = 100;  // x of vertical rule (wider left column for FONT_LARGE clock)
     const int MARGIN     = 6;    // horizontal inset from screen edges
-    const int L_X        = 12;   // left edge of left column text (avoids left-edge clipping)
+    const int L_X        = 16;   // left edge of left column text (extra inset avoids corner clipping)
     const int R_X        = SEP_X + 5;   // left edge of right column
     const int ARROW_SZ   = 11;          // slim arrow; at sz=11, T=1 so shaft is 2 px wide
 
@@ -561,8 +671,8 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             g.setFont(&FONT_LARGE);
             g.setTextSize(1);
             String glucoseStr = String(g_reading.sgv);
-            String deltaStr   = "(" + String(g_reading.delta >= 0 ? "+" : "") +
-                                String(g_reading.delta) + ")";
+            String deltaStr   = String(g_reading.delta >= 0 ? "+" : "") +
+                                String(g_reading.delta);
             int glucoseW = g.textWidth(glucoseStr);
             int deltaW   = g.textWidth(deltaStr);
             // Group: glucose | 4px gap | arrow (2*ARROW_SZ) | 4px gap | delta
@@ -578,7 +688,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             int arrowCX = startX + glucoseW + 4 + ARROW_SZ;
             drawTrendArrow(g, g_reading.direction, arrowCX, hCY, col, ARROW_SZ);
 
-            // Delta in parentheses, same FONT_LARGE as glucose
+            // Delta (signed), same FONT_LARGE as glucose
             g.setFont(&FONT_LARGE);
             g.setTextSize(1);
             g.setTextColor(col);
@@ -661,36 +771,50 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 
     // ── Graph: target boundary lines ──────────────────────────────
     // High line = orange (approaching high risk), Low line = red (low risk)
-    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W, COLOR_GRAPH_HIGH_LINE);
-    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_LOW),  GRAPH_W, COLOR_GRAPH_LOW_LINE);
+    drawDashedHLine(g, GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W,
+                    COLOR_GRAPH_HIGH_LINE,
+                    GRAPH_TARGET_DASH_LEN,
+                    GRAPH_TARGET_GAP_LEN);
+    drawDashedHLine(g, GRAPH_LEFT, sgvToY(TARGET_LOW), GRAPH_W,
+                    COLOR_GRAPH_LOW_LINE,
+                    GRAPH_TARGET_DASH_LEN,
+                    GRAPH_TARGET_GAP_LEN);
 
-    // ── Graph: X-axis 10-minute grid lines + hour ticks + labels ──
+    // ── Graph: X-axis 10-minute grid lines + time labels ──────────
     if (g_ntpSynced && nowMs > 0) {
-        // Faint 10-minute vertical lines across the full graph height
+        // Draw 10-minute vertical lines and label them as HH:MM.
+        // Labels are culled when too close to keep the axis readable.
         const int64_t tenMinMs = 600000LL;
-        int64_t firstTenMin = (oldestMs / tenMinMs + 1) * tenMinMs;
-        for (int64_t t = firstTenMin; t <= nowMs; t += tenMinMs) {
-            int x = msToX(t);
-            if (x > GRAPH_LEFT && x < GRAPH_RIGHT) {
-                g.drawFastVLine(x, GRAPH_TOP, GRAPH_H, COLOR_GRAPH_10MIN_LINE);
-            }
-        }
+        // Start at the latest 10-minute boundary before "now"
+        // (e.g. 19:37 -> 19:30), then step backward by 10 minutes.
+        int64_t firstTenMin = (nowMs / tenMinMs) * tenMinMs;
+
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
         g.setTextDatum(lgfx::top_center);
-        const int64_t hourMs  = 3600000LL;
-        int64_t firstHour = (oldestMs / hourMs + 1) * hourMs;
-        for (int64_t t = firstHour; t <= nowMs + 60000LL; t += hourMs) {
+
+        int lastLabelX = GRAPH_RIGHT + 1000;
+        const int minLabelSpacingPx = 28;
+
+        for (int64_t t = firstTenMin; t >= oldestMs; t -= tenMinMs) {
             int x = msToX(t);
-            if (x > GRAPH_LEFT + 2 && x < GRAPH_RIGHT - 2) {
-                g.drawFastVLine(x, GRAPH_BOTTOM, 4, COLOR_GRAPH_AXIS);
-                time_t secs = (time_t)(t / 1000LL);
-                struct tm ti;
-                localtime_r(&secs, &ti);
-                char tbuf[6];
-                strftime(tbuf, sizeof(tbuf), "%H:%M", &ti);
-                g.drawString(tbuf, x, GRAPH_BOTTOM + 2);
+            if (x > GRAPH_LEFT && x < GRAPH_RIGHT) {
+                drawDashedVLine(g, x, GRAPH_TOP, GRAPH_H,
+                                COLOR_GRAPH_10MIN_LINE,
+                                GRAPH_10MIN_DASH_LEN,
+                                GRAPH_10MIN_GAP_LEN);
+
+                if ((lastLabelX - x) >= minLabelSpacingPx &&
+                    x > GRAPH_LEFT + 8 && x < GRAPH_RIGHT - 8) {
+                    time_t secs = (time_t)(t / 1000LL);
+                    struct tm ti;
+                    localtime_r(&secs, &ti);
+                    char tbuf[6];
+                    strftime(tbuf, sizeof(tbuf), "%H:%M", &ti);
+                    g.drawString(tbuf, x, GRAPH_BOTTOM + 2);
+                    lastLabelX = x;
+                }
             }
         }
     }
