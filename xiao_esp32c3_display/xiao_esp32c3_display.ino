@@ -134,7 +134,7 @@ public:
             cfg.dummy_read_bits  = 1;
             cfg.readable         = false;
             cfg.invert           = true;   // required for Waveshare 1.69"
-            cfg.rgb_order        = false;
+            cfg.rgb_order        = true;
             cfg.dlen_16bit       = false;
             cfg.bus_shared       = false;
             _panel.config(cfg);
@@ -290,12 +290,12 @@ static String ageLabel(int64_t dateMs) {
     int64_t nowMs   = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
     int64_t ageMs   = nowMs - dateMs;
 
-    if (ageMs < 0)           return "agora";
+    if (ageMs < 0)           return "now";
     int ageSec = (int)(ageMs / 1000LL);
-    if (ageSec <  60)        return String(ageSec) + "s atras";
+    if (ageSec <  60)        return String(ageSec) + " s ago";
     int ageMin = ageSec / 60;
-    if (ageMin <  60)        return String(ageMin) + " min atras";
-    return String(ageMin / 60) + " h atras";
+    if (ageMin <  60)        return String(ageMin) + " min ago";
+    return String(ageMin / 60) + " h ago";
 }
 
 // Current time as "HH:MM" string, or "" when NTP not yet synced.
