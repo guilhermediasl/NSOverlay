@@ -70,7 +70,7 @@ public:
             auto cfg        = _bus.config();
             cfg.spi_host    = SPI2_HOST;
             cfg.spi_mode    = 0;
-            cfg.freq_write  = 40000000;
+            cfg.freq_write  = 20000000;  // 20 MHz – safer for jumper-wire connections
             cfg.freq_read   = 16000000;
             cfg.spi_3wire   = true;   // write-only (no MISO)
             cfg.use_lock    = true;
@@ -284,6 +284,23 @@ static void renderDisplay() {
     const int W = LCD_WIDTH;   // 240
     const int H = LCD_HEIGHT;  // 280
 
+    // If the off-screen sprite could not be allocated, fall back to
+    // rendering directly on the LCD (with some flicker accepted).
+    if (canvas.width() == 0) {
+        lcd.fillScreen(TFT_BLACK);
+        lcd.setFont(&lgfx::fonts::Font4);
+        lcd.setTextDatum(lgfx::middle_center);
+        if (g_reading.valid) {
+            lcd.setTextColor(glucoseColor(g_reading.sgv));
+            lcd.drawString(String(g_reading.sgv), W / 2, H / 2);
+        } else {
+            lcd.setTextColor(TFT_RED);
+            String msg = g_error.length() > 0 ? g_error : "Aguarde...";
+            lcd.drawString(msg, W / 2, H / 2);
+        }
+        return;
+    }
+
     canvas.fillSprite(TFT_BLACK);
 
     // ---- Header -------------------------------------------------
@@ -372,6 +389,18 @@ static void renderDisplay() {
 
 // Splash screen while booting.
 static void showSplash(const String& msg) {
+    // Direct-LCD fallback when sprite is unavailable.
+    if (canvas.width() == 0) {
+        lcd.fillScreen(TFT_BLACK);
+        lcd.setFont(&lgfx::fonts::Font4);
+        lcd.setTextColor(TFT_WHITE);
+        lcd.setTextDatum(lgfx::middle_center);
+        lcd.drawString("NSOverlay", LCD_WIDTH / 2, LCD_HEIGHT / 2 - 20);
+        lcd.setFont(&lgfx::fonts::Font2);
+        lcd.setTextColor(lcd.color565(100, 210, 230));
+        lcd.drawString(msg, LCD_WIDTH / 2, LCD_HEIGHT / 2 + 20);
+        return;
+    }
     canvas.fillSprite(TFT_BLACK);
     canvas.setFont(&lgfx::fonts::Font4);
     canvas.setTextColor(TFT_WHITE);
@@ -443,11 +472,22 @@ void setup() {
     lcd.init();
     lcd.setRotation(0);        // portrait, cable at bottom
     lcd.setBrightness(LCD_BRIGHTNESS);
+
+    // Hardware sanity check: paint the panel blue briefly.
+    // If you never see a blue flash, the LCD wiring needs checking
+    // (SPI pins, CS, DC or RST not connected correctly).
+    lcd.fillScreen(lcd.color565(0, 100, 255));
+    delay(300);
     lcd.fillScreen(TFT_BLACK);
 
     // --- Create off-screen sprite (eliminates flicker) ----------
     canvas.setColorDepth(16);
-    canvas.createSprite(LCD_WIDTH, LCD_HEIGHT);
+    void* spriteBuf = canvas.createSprite(LCD_WIDTH, LCD_HEIGHT);
+    if (!spriteBuf) {
+        Serial.println("[DISPLAY] WARNING: sprite alloc failed – check free heap");
+    } else {
+        Serial.println("[DISPLAY] Sprite OK");
+    }
 
     showSplash("Iniciando...");
     delay(800);
