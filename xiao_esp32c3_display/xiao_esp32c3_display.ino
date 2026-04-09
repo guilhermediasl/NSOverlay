@@ -170,10 +170,10 @@ static String sha1Hex(const String& input) {
 // Works on any LovyanGFX drawable (LGFX_Device or LGFX_Sprite).
 static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
                            int cx, int cy, uint16_t col) {
-    const int SZ = 20;  // half-size of arrow bounding box
-    const int HW = 9;   // arrowhead half-width (perpendicular to direction)
-    const int T  = 3;   // shaft half-thickness
-    const int hw = 7;   // diagonal arrowhead half-width (~HW * 0.7)
+    const int SZ = 24;  // half-size of arrow bounding box (matches Font7 ~48px height)
+    const int HW = 11;  // arrowhead half-width (perpendicular to direction)
+    const int T  = 4;   // shaft half-thickness
+    const int hw = 8;   // diagonal arrowhead half-width (~HW * 0.7)
 
     if (dir == "DoubleUp") {
         // Two stacked arrowheads pointing up + short shaft below
@@ -361,10 +361,11 @@ static void renderDisplay() {
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.
     //   Row 1 – clock (top-center, Font4)                  y = 22
-    //   Row 2 – [glucose | arrow | delta] all at y = 95
-    //           glucose: middle_center at GLUCOSE_X (~95)
-    //           arrow:   centre at ARROW_CX (~175)
-    //           delta:   middle_left at DELTA_X (~203), same colour as glucose
+    //   Row 2 – [glucose | arrow | delta] all at y = 95, all Font7
+    //           Full group width ≈ 75 + 48 + 75 = 198 px → centred on 240 px
+    //           glucose: middle_center at GLUCOSE_X (55)
+    //           arrow:   centre at ARROW_CX (120)
+    //           delta:   middle_left at DELTA_X (148)
     //   Row 3 – age of reading (Font2, centre)              y = 175
     //   Row 4 – stale-data warning (if any, Font2)          y = 207
     //   Row 5 – WiFi / NS status bar (Font0, bottom)        y = H-10
@@ -375,9 +376,9 @@ static void renderDisplay() {
     const int Y_STALE   = 207;
     const int Y_STATUS  = H - 10;
     // Horizontal positions for the inline glucose row
-    const int GLUCOSE_X = 95;    // middle_center x for glucose number
-    const int ARROW_CX  = 175;   // centre of trend arrow (SZ=20, spans 155-195)
-    const int DELTA_X   = 203;   // middle_left x for delta text (ARROW_CX + SZ + 8)
+    const int GLUCOSE_X = 55;    // middle_center x for glucose number (Font7 ~75 px wide)
+    const int ARROW_CX  = 120;   // centre of trend arrow (SZ=24 → spans 96-144)
+    const int DELTA_X   = 148;   // middle_left x for delta text (Font7, after arrow)
 
     String clk = clockString();
 
@@ -413,10 +414,10 @@ static void renderDisplay() {
             // ---- Trend arrow – graphical, centre of row -------------
             drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
 
-            // ---- Delta – right of arrow, same colour as glucose -----
+            // ---- Delta – right of arrow, Font7 (same size as glucose) --
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                               + String(g_reading.delta);
-            lcd.setFont(&lgfx::fonts::Font4);
+            lcd.setFont(&lgfx::fonts::Font7);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_left);
             lcd.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
@@ -486,10 +487,10 @@ static void renderDisplay() {
         // ---- Trend arrow – graphical, centre of row -------------
         drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
 
-        // ---- Delta – right of arrow, same colour as glucose -----
+        // ---- Delta – right of arrow, Font7 (same size as glucose) --
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                           + String(g_reading.delta);
-        canvas.setFont(&lgfx::fonts::Font4);
+        canvas.setFont(&lgfx::fonts::Font7);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_left);
         canvas.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
