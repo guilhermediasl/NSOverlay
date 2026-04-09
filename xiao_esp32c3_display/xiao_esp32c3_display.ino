@@ -360,15 +360,15 @@ static void renderDisplay() {
 
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.
-    //   Row 1 – clock (top-center, Font4)                  y = 22
+    //   Row 1 – clock (top-center, FreeSansBold18pt)        y = 22
     //   Row 2 – [glucose | arrow | delta] all at y = 95, all Font7
     //           Full group width ≈ 75 + 48 + 75 = 198 px → centred on 240 px
     //           glucose: middle_center at GLUCOSE_X (55)
     //           arrow:   centre at ARROW_CX (130) — 10 px gap after 3-digit glucose
     //           delta:   middle_left at DELTA_X (158)
-    //   Row 3 – age of reading (Font4, centre)              y = 175
-    //   Row 4 – stale-data warning (if any, Font2)          y = 207
-    //   Row 5 – WiFi / NS status bar (Font0, bottom)        y = H-10
+    //   Row 3 – age of reading (FreeSans12pt, centre)        y = 175
+    //   Row 4 – stale-data warning (FreeSans9pt, if any)     y = 207
+    //   Row 5 – WiFi / NS status bar (Font0, bottom)         y = H-10
     const int CORNER_MARGIN = 16;   // horizontal inset from left/right edges
     const int Y_CLOCK   = 22;
     const int Y_GLUCOSE = 95;
@@ -389,7 +389,7 @@ static void renderDisplay() {
 
         // ---- Clock (top-center, prominent) -------------------------
         if (clk.length() > 0) {
-            lcd.setFont(&lgfx::fonts::Font4);
+            lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
             lcd.setTextSize(1);
             lcd.setTextColor(TFT_WHITE);
             lcd.setTextDatum(lgfx::top_center);
@@ -397,7 +397,7 @@ static void renderDisplay() {
         }
 
         if (!g_reading.valid) {
-            lcd.setFont(&lgfx::fonts::Font4);
+            lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
             lcd.setTextColor(TFT_RED);
             lcd.setTextDatum(lgfx::middle_center);
             String msg = g_error.length() > 0 ? g_error : "Aguarde...";
@@ -422,7 +422,7 @@ static void renderDisplay() {
             lcd.setTextDatum(lgfx::middle_left);
             lcd.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-            // ---- Age of reading (Font4, alert colour when stale) ----
+            // ---- Age of reading (FreeSans12pt, alert colour when stale) ----
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
                 bool stale = false;
@@ -432,7 +432,7 @@ static void renderDisplay() {
                     int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                     stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
                 }
-                lcd.setFont(&lgfx::fonts::Font4);
+                lcd.setFont(&lgfx::fonts::FreeSans12pt7b);
                 lcd.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
@@ -444,7 +444,7 @@ static void renderDisplay() {
                 int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                 int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
                 if (ageMin >= 15) {
-                    lcd.setFont(&lgfx::fonts::Font2);
+                    lcd.setFont(&lgfx::fonts::FreeSans9pt7b);
                     lcd.setTextColor(TFT_YELLOW);
                     lcd.setTextDatum(lgfx::middle_center);
                     lcd.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
@@ -468,7 +468,7 @@ static void renderDisplay() {
 
     // ---- Clock (top-center, prominent) --------------------------
     if (clk.length() > 0) {
-        canvas.setFont(&lgfx::fonts::Font4);
+        canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
         canvas.setTextSize(1);
         canvas.setTextColor(TFT_WHITE);
         canvas.setTextDatum(lgfx::top_center);
@@ -478,7 +478,7 @@ static void renderDisplay() {
     if (!g_reading.valid) {
         // ---- Error / loading state ------------------------------
         canvas.setTextColor(TFT_RED);
-        canvas.setFont(&lgfx::fonts::Font4);
+        canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
         canvas.setTextDatum(lgfx::middle_center);
         String msg = g_error.length() > 0 ? g_error : "Aguarde...";
         canvas.drawString(msg, W / 2, H / 2);
@@ -502,7 +502,7 @@ static void renderDisplay() {
         canvas.setTextDatum(lgfx::middle_left);
         canvas.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-        // ---- Age of reading (Font4, alert colour when stale) ----
+        // ---- Age of reading (FreeSans12pt, alert colour when stale) ----
         String age = ageLabel(g_reading.dateMs);
         if (age.length() > 0) {
             bool stale = false;
@@ -512,7 +512,7 @@ static void renderDisplay() {
                 int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                 stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
             }
-            canvas.setFont(&lgfx::fonts::Font4);
+            canvas.setFont(&lgfx::fonts::FreeSans12pt7b);
             canvas.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
@@ -525,7 +525,7 @@ static void renderDisplay() {
             int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
             int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
             if (ageMin >= 15) {
-                canvas.setFont(&lgfx::fonts::Font2);
+                canvas.setFont(&lgfx::fonts::FreeSans9pt7b);
                 canvas.setTextColor(TFT_YELLOW);
                 canvas.setTextDatum(lgfx::middle_center);
                 canvas.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
@@ -554,21 +554,21 @@ static void showSplash(const String& msg) {
     // Direct-LCD fallback when sprite is unavailable.
     if (canvas.width() == 0) {
         lcd.fillScreen(TFT_BLACK);
-        lcd.setFont(&lgfx::fonts::Font4);
+        lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
         lcd.setTextColor(TFT_WHITE);
         lcd.setTextDatum(lgfx::middle_center);
         lcd.drawString("NSOverlay", lcd.width() / 2, lcd.height() / 2 - 20);
-        lcd.setFont(&lgfx::fonts::Font2);
+        lcd.setFont(&lgfx::fonts::FreeSans9pt7b);
         lcd.setTextColor(lcd.color565(100, 210, 230));
         lcd.drawString(msg, lcd.width() / 2, lcd.height() / 2 + 20);
         return;
     }
     canvas.fillSprite(TFT_BLACK);
-    canvas.setFont(&lgfx::fonts::Font4);
+    canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
     canvas.setTextColor(TFT_WHITE);
     canvas.setTextDatum(lgfx::middle_center);
     canvas.drawString("NSOverlay", lcd.width() / 2, lcd.height() / 2 - 20);
-    canvas.setFont(&lgfx::fonts::Font2);
+    canvas.setFont(&lgfx::fonts::FreeSans9pt7b);
     canvas.setTextColor(lcd.color565(100, 210, 230));
     canvas.drawString("XIAO ESP32C3", lcd.width() / 2, lcd.height() / 2 + 12);
     canvas.setTextColor(lcd.color565(150, 150, 150));
