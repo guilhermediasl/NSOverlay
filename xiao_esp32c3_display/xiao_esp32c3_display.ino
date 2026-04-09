@@ -296,19 +296,17 @@ static void renderDisplay() {
 
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.
-    //   Row 1 – header "GLICEMIA" + clock    y = 14  (Font2, ~16 px)
-    //   Row 2 – large glucose + trend arrow  y = 84  (Font7, ~48 px, centre)
-    //   Row 3 – "mg/dL" unit label           y = 113 (Font2, top)
-    //   Row 4 – delta                        y = 150 (Font4, ~26 px, centre)
-    //   Row 5 – age of reading               y = 183 (Font2, centre)
-    //   Row 6 – stale-data warning (if any)  y = 207 (Font2, centre)
-    //   Row 7 – WiFi / NS status bar         y = H-10 (Font0, bottom datum)
+    //   Row 1 – clock (top-center, Font4)    y = 22
+    //   Row 2 – large glucose + trend arrow  y = 95  (Font7, ~48 px, centre)
+    //   Row 3 – delta (no units)             y = 152 (Font4, ~26 px, centre)
+    //   Row 4 – age of reading               y = 185 (Font2, centre)
+    //   Row 5 – stale-data warning (if any)  y = 207 (Font2, centre)
+    //   Row 6 – WiFi / NS status bar         y = H-10 (Font0, bottom datum)
     const int CORNER_MARGIN = 16;  // horizontal inset from left/right edges
-    const int Y_HEADER  = 14;
-    const int Y_GLUCOSE = 84;
-    const int Y_UNIT    = 113;
-    const int Y_DELTA   = 150;
-    const int Y_AGE     = 183;
+    const int Y_CLOCK   = 22;
+    const int Y_GLUCOSE = 95;
+    const int Y_DELTA   = 152;
+    const int Y_AGE     = 185;
     const int Y_STALE   = 207;
     const int Y_STATUS  = H - 10;
 
@@ -319,16 +317,13 @@ static void renderDisplay() {
     if (canvas.width() == 0) {
         lcd.fillScreen(TFT_BLACK);
 
-        // ---- Header: "GLICEMIA" left, clock right -------------------
-        lcd.setFont(&lgfx::fonts::Font2);
-        lcd.setTextSize(1);
-        lcd.setTextColor(lcd.color565(120, 120, 120));
-        lcd.setTextDatum(lgfx::top_left);
-        lcd.drawString("GLICEMIA", CORNER_MARGIN, Y_HEADER);
+        // ---- Clock (top-center, prominent) -------------------------
         if (clk.length() > 0) {
-            lcd.setTextDatum(lgfx::top_right);
-            lcd.setTextColor(lcd.color565(180, 180, 180));
-            lcd.drawString(clk, W - CORNER_MARGIN, Y_HEADER);
+            lcd.setFont(&lgfx::fonts::Font4);
+            lcd.setTextSize(1);
+            lcd.setTextColor(TFT_WHITE);
+            lcd.setTextDatum(lgfx::top_center);
+            lcd.drawString(clk, W / 2, Y_CLOCK);
         }
 
         if (!g_reading.valid) {
@@ -348,15 +343,10 @@ static void renderDisplay() {
             lcd.setFont(&lgfx::fonts::Font4);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_right);
-            lcd.drawString(trendArrow(g_reading.direction), W - 6, Y_GLUCOSE);
-
-            lcd.setFont(&lgfx::fonts::Font2);
-            lcd.setTextColor(lcd.color565(140, 140, 140));
-            lcd.setTextDatum(lgfx::top_center);
-            lcd.drawString("mg/dL", W / 2 - 18, Y_UNIT);
+            lcd.drawString(trendArrow(g_reading.direction), W - CORNER_MARGIN, Y_GLUCOSE);
 
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
-                              + String(g_reading.delta) + " mg/dL";
+                              + String(g_reading.delta);
             lcd.setFont(&lgfx::fonts::Font4);
             lcd.setTextColor(lcd.color565(100, 210, 230));
             lcd.setTextDatum(lgfx::middle_center);
@@ -365,7 +355,7 @@ static void renderDisplay() {
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
                 lcd.setFont(&lgfx::fonts::Font2);
-                lcd.setTextColor(lcd.color565(120, 120, 120));
+                lcd.setTextColor(lcd.color565(210, 210, 210));
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
             }
@@ -398,16 +388,13 @@ static void renderDisplay() {
 
     canvas.fillSprite(TFT_BLACK);
 
-    // ---- Header: "GLICEMIA" left, clock right -------------------
-    canvas.setFont(&lgfx::fonts::Font2);
-    canvas.setTextSize(1);
-    canvas.setTextColor(lcd.color565(120, 120, 120));
-    canvas.setTextDatum(lgfx::top_left);
-    canvas.drawString("GLICEMIA", CORNER_MARGIN, Y_HEADER);
+    // ---- Clock (top-center, prominent) --------------------------
     if (clk.length() > 0) {
-        canvas.setTextDatum(lgfx::top_right);
-        canvas.setTextColor(lcd.color565(180, 180, 180));
-        canvas.drawString(clk, W - CORNER_MARGIN, Y_HEADER);
+        canvas.setFont(&lgfx::fonts::Font4);
+        canvas.setTextSize(1);
+        canvas.setTextColor(TFT_WHITE);
+        canvas.setTextDatum(lgfx::top_center);
+        canvas.drawString(clk, W / 2, Y_CLOCK);
     }
 
     if (!g_reading.valid) {
@@ -430,17 +417,11 @@ static void renderDisplay() {
         canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_right);
-        canvas.drawString(trendArrow(g_reading.direction), W - 6, Y_GLUCOSE);
+        canvas.drawString(trendArrow(g_reading.direction), W - CORNER_MARGIN, Y_GLUCOSE);
 
-        // ---- Units label ----------------------------------------
-        canvas.setFont(&lgfx::fonts::Font2);
-        canvas.setTextColor(lcd.color565(140, 140, 140));
-        canvas.setTextDatum(lgfx::top_center);
-        canvas.drawString("mg/dL", W / 2 - 18, Y_UNIT);
-
-        // ---- Delta ----------------------------------------------
+        // ---- Delta (no units) -----------------------------------
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
-                          + String(g_reading.delta) + " mg/dL";
+                          + String(g_reading.delta);
         canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(lcd.color565(100, 210, 230));
         canvas.setTextDatum(lgfx::middle_center);
@@ -450,7 +431,7 @@ static void renderDisplay() {
         String age = ageLabel(g_reading.dateMs);
         if (age.length() > 0) {
             canvas.setFont(&lgfx::fonts::Font2);
-            canvas.setTextColor(lcd.color565(120, 120, 120));
+            canvas.setTextColor(lcd.color565(210, 210, 210));
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
         }
