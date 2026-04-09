@@ -364,9 +364,9 @@ static void renderDisplay() {
     //   Row 2 – [glucose | arrow | delta] all at y = 95, all Font7
     //           Full group width ≈ 75 + 48 + 75 = 198 px → centred on 240 px
     //           glucose: middle_center at GLUCOSE_X (55)
-    //           arrow:   centre at ARROW_CX (120)
-    //           delta:   middle_left at DELTA_X (148)
-    //   Row 3 – age of reading (Font2, centre)              y = 175
+    //           arrow:   centre at ARROW_CX (130) — 10 px gap after 3-digit glucose
+    //           delta:   middle_left at DELTA_X (158)
+    //   Row 3 – age of reading (Font4, centre)              y = 175
     //   Row 4 – stale-data warning (if any, Font2)          y = 207
     //   Row 5 – WiFi / NS status bar (Font0, bottom)        y = H-10
     const int CORNER_MARGIN = 16;   // horizontal inset from left/right edges
@@ -377,8 +377,8 @@ static void renderDisplay() {
     const int Y_STATUS  = H - 10;
     // Horizontal positions for the inline glucose row
     const int GLUCOSE_X = 55;    // middle_center x for glucose number (Font7 ~75 px wide)
-    const int ARROW_CX  = 120;   // centre of trend arrow (SZ=24 → spans 96-144)
-    const int DELTA_X   = 148;   // middle_left x for delta text (Font7, after arrow)
+    const int ARROW_CX  = 130;   // centre of trend arrow (SZ=24 → spans 106-154); extra gap after glucose
+    const int DELTA_X   = 158;   // middle_left x for delta text (Font7, after arrow)
 
     String clk = clockString();
 
@@ -422,11 +422,18 @@ static void renderDisplay() {
             lcd.setTextDatum(lgfx::middle_left);
             lcd.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-            // ---- Age of reading (Font2) ------------------------------
+            // ---- Age of reading (Font4, alert colour when stale) ----
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
-                lcd.setFont(&lgfx::fonts::Font2);
-                lcd.setTextColor(lcd.color565(210, 210, 210));
+                bool stale = false;
+                if (g_ntpSynced && g_reading.dateMs > 0) {
+                    struct timeval tv;
+                    gettimeofday(&tv, nullptr);
+                    int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+                    stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
+                }
+                lcd.setFont(&lgfx::fonts::Font4);
+                lcd.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
             }
@@ -495,11 +502,18 @@ static void renderDisplay() {
         canvas.setTextDatum(lgfx::middle_left);
         canvas.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-        // ---- Age of reading (Font2) -----------------------------
+        // ---- Age of reading (Font4, alert colour when stale) ----
         String age = ageLabel(g_reading.dateMs);
         if (age.length() > 0) {
-            canvas.setFont(&lgfx::fonts::Font2);
-            canvas.setTextColor(lcd.color565(210, 210, 210));
+            bool stale = false;
+            if (g_ntpSynced && g_reading.dateMs > 0) {
+                struct timeval tv;
+                gettimeofday(&tv, nullptr);
+                int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+                stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
+            }
+            canvas.setFont(&lgfx::fonts::Font4);
+            canvas.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
         }
