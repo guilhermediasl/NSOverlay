@@ -72,7 +72,7 @@ public:
             cfg.spi_mode    = 0;
             cfg.freq_write  = 20000000;  // 20 MHz – safer for jumper-wire connections
             cfg.freq_read   = 16000000;
-            cfg.spi_3wire   = true;   // write-only (no MISO)
+            cfg.spi_3wire   = false;  // 4-wire SPI: separate DC pin (not encoded in stream)
             cfg.use_lock    = true;
             cfg.dma_channel = SPI_DMA_CH_AUTO;
             cfg.pin_sclk    = LCD_PIN_SCLK;
