@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import hashlib
+import html as _html
 import logging
 import logging.handlers
 import requests
@@ -1838,16 +1839,15 @@ class GlucoseWidget(QWidget):
         font so they scale correctly when *_apply_dynamic_header_fonts* adjusts the base
         size for compact-mode widgets.
         """
-        arrow_html = f'<span style="font-size:115%;">{trend_arrow}</span>'
+        arrow_html = f'<span style="font-size:115%;">{_html.escape(str(trend_arrow))}</span>'
         if delta_text:
-            delta_stripped = delta_text.strip()
             delta_html = (
                 f'<span style="font-size:68%;font-weight:normal;vertical-align:middle;">'
-                f' {delta_stripped}</span>'
+                f' {_html.escape(delta_text.strip())}</span>'
             )
         else:
             delta_html = ''
-        return f'{current} {arrow_html}{delta_html}'
+        return f'{_html.escape(str(current))} {arrow_html}{delta_html}'
 
     def auto_resize_to_fit_content(self, glucose_text):
         """Automatically resize window to fit glucose content optimally (only if not manually resized)"""
