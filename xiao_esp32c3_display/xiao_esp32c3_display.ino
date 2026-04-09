@@ -312,7 +312,7 @@ static bool fetchNightscout() {
         if (attempt > 0) {
             Serial.print("[NS] Retry ");
             Serial.println(attempt);
-            delay(2000);
+            delay(5000);  // give the network more time to recover between retries
             if (WiFi.status() != WL_CONNECTED) {
                 g_error = "WiFi desconectado";
                 return false;
@@ -325,11 +325,15 @@ static bool fetchNightscout() {
         // setInsecure() and instead call client.setCACert(<PEM string>) with
         // the root CA certificate of your Nightscout host.
         client.setInsecure();
+        // Cap the TLS handshake so a stalled connection does not block for
+        // the 60-90 s lwIP default.  http.setTimeout() only covers the HTTP
+        // response-read phase; setHandshakeTimeout() covers the TLS negotiation.
+        client.setHandshakeTimeout(10);  // seconds
 
         HTTPClient http;
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
         http.begin(client, url);
-        http.setTimeout(8000);
+        http.setTimeout(10000);  // ms – response read timeout
 
         if (strlen(API_SECRET) > 0) {
             http.addHeader("api-secret", sha1Hex(String(API_SECRET)));
@@ -339,7 +343,13 @@ static bool fetchNightscout() {
         if (code != HTTP_CODE_OK) {
             g_error = "HTTP " + String(code);
             Serial.print("[NS] HTTP error: ");
-            Serial.println(code);
+            Serial.print(code);
+            if (code < 0) {
+                Serial.print(" (");
+                Serial.print(http.errorToString(code));
+                Serial.print(")");
+            }
+            Serial.println();
             http.end();
             continue;  // retry
         }
@@ -723,11 +733,15 @@ void loop() {
 
     // Periodic data refresh
     if (now - g_lastFetchMs >= REFRESH_INTERVAL_MS) {
-        g_lastFetchMs = now;
         Serial.print("[Loop] Refresh at ");
         Serial.print(now / 1000);
         Serial.println("s");
         fetchNightscout();
+        // Stamp AFTER the fetch completes so that a slow or failed request
+        // (e.g. a 2-minute TLS hang) does not cause the next loop iteration
+        // to immediately trigger another fetch because the elapsed time already
+        // exceeds REFRESH_INTERVAL_MS.
+        g_lastFetchMs = millis();
     }
 
     // Re-render every second so the age label stays up-to-date
