@@ -130,6 +130,10 @@
 #define SHOW_GRAPH       1
 #define GRAPH_MINUTES    180
 #define GRAPH_ZONE_FILLS 1
+// GRAPH_HGRID_STEP – glucose value interval (mg/dL) for horizontal grid lines.
+// A line + Y-axis label is drawn at every multiple of this value within the
+// visible Y range.  50 is a good default for a 3-hour window.
+#define GRAPH_HGRID_STEP 50
 
 // ---- Display colours --------------------------------------------
 // All colour constants are 16-bit RGB-565 values.
@@ -170,6 +174,7 @@
 #define COLOR_GRAPH_LOW_FILL     RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
 #define COLOR_GRAPH_HIGH_FILL    RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
 #define COLOR_GRAPH_10MIN_LINE   RGB565( 30,  30,  30)   // very dim grey – 10-minute vertical grid lines
+#define COLOR_GRAPH_HGRID_LINE   RGB565( 35,  35,  35)   // very dim grey – horizontal glucose grid lines
 #define COLOR_GRAPH_AXIS         RGB565( 90,  90,  90)   // axis lines / tick marks
 #define COLOR_GRAPH_AXIS_LABEL   RGB565(120, 120, 120)   // X / Y axis text
 #define COLOR_GRAPH_BORDER       RGB565( 50,  50,  50)   // graph area border

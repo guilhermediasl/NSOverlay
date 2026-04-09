@@ -126,6 +126,7 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `GRAPH_MINUTES` | Time window shown in graph mode (default `180` = 3 h) |
 | `GRAPH_ENTRY_INTERVAL` | Expected gap between CGM readings in minutes (default `5`; set to `1` if your Nightscout logs every minute) |
 | `GRAPH_ZONE_FILLS` | `1` (default) = draw faint coloured zone backgrounds · `0` = clean black background |
+| `GRAPH_HGRID_STEP` | Glucose interval (mg/dL) between horizontal grid lines (default `50`) |
 | `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
 | `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
 
@@ -183,6 +184,7 @@ All `COLOR_*` constants in `config.h` accept:
 | `COLOR_GRAPH_LOW_FILL` | `RGB565(50, 0, 0)` | Dark red fill below the low-target zone in the graph |
 | `COLOR_GRAPH_HIGH_FILL` | `RGB565(50, 25, 0)` | Dark orange fill above the high-target zone in the graph |
 | `COLOR_GRAPH_10MIN_LINE` | `RGB565(30, 30, 30)` | Very dim vertical line every 10 minutes on the graph |
+| `COLOR_GRAPH_HGRID_LINE` | `RGB565(35, 35, 35)` | Very dim horizontal line every `GRAPH_HGRID_STEP` mg/dL |
 | `COLOR_GRAPH_AXIS` | `RGB565(90, 90, 90)` | Axis lines and tick marks |
 | `COLOR_GRAPH_AXIS_LABEL` | `RGB565(120, 120, 120)` | X / Y axis text labels |
 | `COLOR_GRAPH_BORDER` | `RGB565(50, 50, 50)` | Graph area border and separator line |

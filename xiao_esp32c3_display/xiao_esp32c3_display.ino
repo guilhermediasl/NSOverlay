@@ -637,18 +637,32 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     }
 #endif  // GRAPH_ZONE_FILLS
 
+    // ── Graph: horizontal glucose grid lines + Y-axis labels ───────
+    // Draw a faint horizontal line every GRAPH_HGRID_STEP mg/dL across the
+    // visible Y range, with the glucose value printed to the left.
+    // The target boundary lines (orange/red) are drawn afterwards so they
+    // always appear on top of the grid.
+    {
+        const int step = GRAPH_HGRID_STEP;
+        // Round up to the first multiple of step at or above yAxisMin
+        int firstGrid = ((yAxisMin + step - 1) / step) * step;
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        g.setTextDatum(lgfx::middle_right);
+        g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
+        for (int v = firstGrid; v <= yAxisMax; v += step) {
+            int y = sgvToY(v);
+            if (y >= GRAPH_TOP && y <= GRAPH_BOTTOM) {
+                g.drawFastHLine(GRAPH_LEFT, y, GRAPH_W, COLOR_GRAPH_HGRID_LINE);
+                g.drawString(String(v), GRAPH_LEFT - 1, y);
+            }
+        }
+    }
+
     // ── Graph: target boundary lines ──────────────────────────────
     // High line = orange (approaching high risk), Low line = red (low risk)
     g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W, COLOR_GRAPH_HIGH_LINE);
     g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_LOW),  GRAPH_W, COLOR_GRAPH_LOW_LINE);
-
-    // ── Graph: Y-axis labels (TARGET_LOW and TARGET_HIGH only) ─────
-    g.setFont(&lgfx::fonts::Font0);
-    g.setTextSize(1);
-    g.setTextDatum(lgfx::middle_right);
-    g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
-    g.drawString(String(TARGET_HIGH), GRAPH_LEFT - 1, sgvToY(TARGET_HIGH));
-    g.drawString(String(TARGET_LOW),  GRAPH_LEFT - 1, sgvToY(TARGET_LOW));
 
     // ── Graph: X-axis 10-minute grid lines + hour ticks + labels ──
     if (g_ntpSynced && nowMs > 0) {
