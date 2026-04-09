@@ -172,6 +172,16 @@ static String         g_error       = "";
 static bool           g_ntpSynced   = false;
 static unsigned long  g_lastFetchMs = 0;
 
+// History ring for graph mode (populated only when SHOW_GRAPH = 1).
+// Nightscout returns entries newest-first; we store them in the same
+// order so g_graphHistory[0] is always the most-recent reading.
+#if SHOW_GRAPH
+    static const int GRAPH_MAX_POINTS = 50;  // covers 4+ h at 5-min intervals
+    struct GraphPoint { int sgv; int64_t dateMs; };
+    static GraphPoint g_graphHistory[GRAPH_MAX_POINTS];
+    static int        g_graphHistoryLen = 0;
+#endif
+
 // =================================================================
 // Helpers
 // =================================================================
@@ -205,58 +215,60 @@ static String sha1Hex(const String& input) {
 // Map Nightscout direction strings to readable ASCII arrows.
 // Draw a real graphical trend arrow centred on (cx, cy).
 // Works on any LovyanGFX drawable (LGFX_Device or LGFX_Sprite).
+// sz controls the half-size of the arrow bounding box; defaults to 24
+// (the size used in the main glucose row) but can be reduced to 14 for
+// compact header use in graph mode.
 static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
-                           int cx, int cy, uint16_t col) {
-    const int SZ = 24;  // half-size of arrow bounding box (matches Font7 ~48px height)
-    const int HW = 11;  // arrowhead half-width (perpendicular to direction)
-    const int T  = 4;   // shaft half-thickness
-    const int hw = 8;   // diagonal arrowhead half-width (~HW * 0.7)
+                           int cx, int cy, uint16_t col, int sz = 24) {
+    const int HW = sz * 11 / 24;  // arrowhead half-width (perpendicular to direction)
+    const int T  = max(1, sz / 6); // shaft half-thickness
+    const int hw = sz *  8 / 24;   // diagonal arrowhead half-width (~HW * 0.7)
 
     if (dir == "DoubleUp") {
         // Two stacked arrowheads pointing up + short shaft below
-        g.fillRect(cx - T, cy, T * 2, SZ / 2, col);
-        g.fillTriangle(cx - HW, cy,           cx, cy - SZ * 2 / 3,
+        g.fillRect(cx - T, cy, T * 2, sz / 2, col);
+        g.fillTriangle(cx - HW, cy,           cx, cy - sz * 2 / 3,
                        cx + HW, cy,           col);
-        g.fillTriangle(cx - HW, cy - SZ * 2 / 3, cx, cy - SZ * 4 / 3,
-                       cx + HW, cy - SZ * 2 / 3, col);
+        g.fillTriangle(cx - HW, cy - sz * 2 / 3, cx, cy - sz * 4 / 3,
+                       cx + HW, cy - sz * 2 / 3, col);
     } else if (dir == "SingleUp") {
-        g.fillRect(cx - T, cy, T * 2, SZ, col);
-        g.fillTriangle(cx - HW, cy, cx, cy - SZ, cx + HW, cy, col);
+        g.fillRect(cx - T, cy, T * 2, sz, col);
+        g.fillTriangle(cx - HW, cy, cx, cy - sz, cx + HW, cy, col);
     } else if (dir == "FortyFiveUp") {
         // Diagonal arrow pointing upper-right
         // Shaft parallelogram (perpendicular to direction (1,-1) is (1,1))
-        g.fillTriangle(cx - SZ + T, cy + SZ + T,
-                       cx - SZ - T, cy + SZ - T,
+        g.fillTriangle(cx - sz + T, cy + sz + T,
+                       cx - sz - T, cy + sz - T,
                        cx - T,      cy - T,      col);
-        g.fillTriangle(cx - SZ + T, cy + SZ + T,
+        g.fillTriangle(cx - sz + T, cy + sz + T,
                        cx + T,      cy + T,
                        cx - T,      cy - T,      col);
         // Arrowhead pointing to upper-right
-        g.fillTriangle(cx + SZ, cy - SZ, cx + hw, cy + hw, cx - hw, cy - hw, col);
+        g.fillTriangle(cx + sz, cy - sz, cx + hw, cy + hw, cx - hw, cy - hw, col);
     } else if (dir == "Flat") {
-        g.fillRect(cx - SZ, cy - T, SZ, T * 2, col);
-        g.fillTriangle(cx, cy - HW, cx + SZ, cy, cx, cy + HW, col);
+        g.fillRect(cx - sz, cy - T, sz, T * 2, col);
+        g.fillTriangle(cx, cy - HW, cx + sz, cy, cx, cy + HW, col);
     } else if (dir == "FortyFiveDown") {
         // Diagonal arrow pointing lower-right
         // Shaft parallelogram (perpendicular to direction (1,1) is (1,-1))
-        g.fillTriangle(cx - SZ + T, cy - SZ - T,
-                       cx - SZ - T, cy - SZ + T,
+        g.fillTriangle(cx - sz + T, cy - sz - T,
+                       cx - sz - T, cy - sz + T,
                        cx - T,      cy + T,      col);
-        g.fillTriangle(cx - SZ + T, cy - SZ - T,
+        g.fillTriangle(cx - sz + T, cy - sz - T,
                        cx + T,      cy - T,
                        cx - T,      cy + T,      col);
         // Arrowhead pointing to lower-right
-        g.fillTriangle(cx + SZ, cy + SZ, cx + hw, cy - hw, cx - hw, cy + hw, col);
+        g.fillTriangle(cx + sz, cy + sz, cx + hw, cy - hw, cx - hw, cy + hw, col);
     } else if (dir == "SingleDown") {
-        g.fillRect(cx - T, cy - SZ, T * 2, SZ, col);
-        g.fillTriangle(cx - HW, cy, cx, cy + SZ, cx + HW, cy, col);
+        g.fillRect(cx - T, cy - sz, T * 2, sz, col);
+        g.fillTriangle(cx - HW, cy, cx, cy + sz, cx + HW, cy, col);
     } else if (dir == "DoubleDown") {
         // Two stacked arrowheads pointing down + short shaft above
-        g.fillRect(cx - T, cy - SZ / 2, T * 2, SZ / 2, col);
-        g.fillTriangle(cx - HW, cy,           cx, cy + SZ * 2 / 3,
+        g.fillRect(cx - T, cy - sz / 2, T * 2, sz / 2, col);
+        g.fillTriangle(cx - HW, cy,           cx, cy + sz * 2 / 3,
                        cx + HW, cy,           col);
-        g.fillTriangle(cx - HW, cy + SZ * 2 / 3, cx, cy + SZ * 4 / 3,
-                       cx + HW, cy + SZ * 2 / 3, col);
+        g.fillTriangle(cx - HW, cy + sz * 2 / 3, cx, cy + sz * 4 / 3,
+                       cx + HW, cy + sz * 2 / 3, col);
     } else {
         g.fillCircle(cx, cy, T, col);
     }
@@ -331,7 +343,15 @@ static bool fetchNightscout() {
         client.setHandshakeTimeout(10);  // seconds
 
         HTTPClient http;
+        // In graph mode request enough readings to fill the time window
+        // (one reading every 5 min, plus a small buffer).
+        // In simple mode only 2 readings are needed (current + previous delta).
+#if SHOW_GRAPH
+        const int fetchCount = min(GRAPH_MAX_POINTS, (GRAPH_MINUTES / 5) + 4);
+        String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=" + String(fetchCount);
+#else
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
+#endif
         http.begin(client, url);
         http.setTimeout(10000);  // ms – response read timeout
 
@@ -357,7 +377,14 @@ static bool fetchNightscout() {
         String body = http.getString();
         http.end();
 
+        // In graph mode the response can be 36+ entries (~10 KB JSON).
+        // Use DynamicJsonDocument (heap) to avoid overflowing the 8 KB task stack.
+        // In simple mode 2 KB on the stack is fine.
+#if SHOW_GRAPH
+        DynamicJsonDocument doc(12288);
+#else
         StaticJsonDocument<2048> doc;
+#endif
         DeserializationError err = deserializeJson(doc, body);
         if (err || !doc.is<JsonArray>()) {
             g_error = "JSON invalido";
@@ -385,6 +412,23 @@ static bool fetchNightscout() {
 
         g_reading = r;
         g_error   = "";
+
+#if SHOW_GRAPH
+        // Populate history array (newest first, matching Nightscout order).
+        g_graphHistoryLen = 0;
+        for (size_t i = 0; i < arr.size() && g_graphHistoryLen < GRAPH_MAX_POINTS; i++) {
+            int     sv  = arr[i]["sgv"]  | 0;
+            int64_t dms = arr[i]["date"] | (int64_t)0;
+            if (sv > 0 && dms > 0) {
+                g_graphHistory[g_graphHistoryLen].sgv    = sv;
+                g_graphHistory[g_graphHistoryLen].dateMs = dms;
+                g_graphHistoryLen++;
+            }
+        }
+        Serial.print("[NS] History points: ");
+        Serial.println(g_graphHistoryLen);
+#endif
+
         Serial.print("[NS] sgv=");
         Serial.print(r.sgv);
         Serial.print(" delta=");
@@ -399,11 +443,241 @@ static bool fetchNightscout() {
 }
 
 // =================================================================
+// Graph-mode rendering helper
+// =================================================================
+// Draws the compact header + glucose history scatter plot.
+// Called from renderDisplay() when SHOW_GRAPH = 1.
+// Accepts an LGFXBase& so it works with both the sprite canvas and
+// direct-LCD fallback — the same pattern used by drawTrendArrow.
+#if SHOW_GRAPH
+static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
+    const int CORNER_MARGIN = 8;
+
+    // ── Layout ─────────────────────────────────────────────────────
+    // Row 1 (y≈10) : clock (left)  +  WiFi / NS status (right)
+    // Row 2 (y≈38) : glucose number + trend arrow + delta (centred)
+    // Row 3 (y≈60) : age of reading (right-aligned) + stale "!" (left)
+    // Row 4        : separator line
+    // Graph area   : remaining vertical space above X-axis labels
+    // X-axis row   : hour labels at the very bottom
+    const int Y_STATUS   = 11;   // middle datum for row 1
+    const int Y_GLUCOSE  = 37;   // middle datum for row 2
+    const int Y_AGE      = 59;   // middle datum for row 3
+    const int GRAPH_TOP  = 70;   // top pixel of the plot area
+    // Leave 14 px at the bottom for X-axis tick labels (Font0 ≈ 8 px)
+    const int GRAPH_BOTTOM = H - 14;
+    const int GRAPH_LEFT   = 26; // left margin for Y-axis labels ("180 " in Font0)
+    const int GRAPH_RIGHT  = W - 3;
+    const int GRAPH_H      = GRAPH_BOTTOM - GRAPH_TOP;
+    const int GRAPH_W      = GRAPH_RIGHT - GRAPH_LEFT;
+
+    // Y mapping: glucose value → pixel row inside the plot area.
+    // We clamp to [SGV_MIN, SGV_MAX] so out-of-range readings still appear.
+    const int SGV_MIN = 40;
+    const int SGV_MAX = 320;
+    auto sgvToY = [&](int sgv) -> int {
+        if (sgv < SGV_MIN) sgv = SGV_MIN;
+        if (sgv > SGV_MAX) sgv = SGV_MAX;
+        return GRAPH_TOP + (SGV_MAX - sgv) * GRAPH_H / (SGV_MAX - SGV_MIN);
+    };
+
+    // Current time
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    int64_t nowMs    = g_ntpSynced
+                       ? ((int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL)
+                       : 0;
+    int64_t windowMs = (int64_t)GRAPH_MINUTES * 60000LL;
+    int64_t oldestMs = nowMs - windowMs;
+
+    // X mapping: Unix-ms timestamp → pixel column inside the plot area.
+    auto msToX = [&](int64_t ms) -> int {
+        if (windowMs <= 0) return GRAPH_LEFT;
+        return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / windowMs);
+    };
+
+    // ── Row 1: clock (left) + WiFi/NS indicators (right) ──────────
+    String clk = clockString();
+    if (clk.length() > 0) {
+        g.setFont(&FONT_SMALL);
+        g.setTextSize(1);
+        g.setTextColor(COLOR_CLOCK);
+        g.setTextDatum(lgfx::middle_left);
+        g.drawString(clk, CORNER_MARGIN, Y_STATUS);
+    }
+    {
+        bool wifiOk = (WiFi.status() == WL_CONNECTED);
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        // "NS:OK" or "NS:ERR" — rightmost
+        g.setTextDatum(lgfx::middle_right);
+        g.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
+        g.drawString(g_reading.valid ? "NS:OK" : "NS:ERR", W - CORNER_MARGIN, Y_STATUS);
+        // "WiFi" indicator just to the left of NS label
+        g.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
+        g.drawString(wifiOk ? "WiFi " : "WiFi!", W - CORNER_MARGIN - 42, Y_STATUS);
+    }
+
+    // ── Row 2: glucose value + trend arrow + delta ─────────────────
+    if (!g_reading.valid) {
+        g.setFont(&FONT_MEDIUM);
+        g.setTextColor(COLOR_ERROR);
+        g.setTextDatum(lgfx::middle_center);
+        g.drawString(g_error.length() > 0 ? g_error : "Aguarde...", W / 2, Y_GLUCOSE);
+    } else {
+        uint16_t col = glucoseColor(g_reading.sgv);
+
+        // Glucose: FONT_LARGE centred slightly left of midpoint so arrow + delta fit.
+        // Group visual centre ≈ W/2.  Estimated widths at FONT_LARGE:
+        //   glucose "XXX" ≈ 45 px → anchor middle_center at W/2 - 38
+        //   arrow   sz=14 → 28 px wide → centre at W/2 + 3
+        //   delta "+XX"   ≈ 30 px → middle_left at W/2 + 18
+        g.setFont(&FONT_LARGE);
+        g.setTextColor(col);
+        g.setTextDatum(lgfx::middle_center);
+        g.drawString(String(g_reading.sgv), W / 2 - 38, Y_GLUCOSE);
+
+        drawTrendArrow(g, g_reading.direction, W / 2 + 3, Y_GLUCOSE, col, 14);
+
+        String deltaStr = (g_reading.delta >= 0 ? "+" : "") + String(g_reading.delta);
+        g.setFont(&FONT_SMALL);
+        g.setTextColor(col);
+        g.setTextDatum(lgfx::middle_left);
+        g.drawString(deltaStr, W / 2 + 19, Y_GLUCOSE);
+    }
+
+    // ── Row 3: age of reading + stale alert ────────────────────────
+    if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
+        String age = ageLabel(g_reading.dateMs);
+        int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
+        bool stale = (ageMin >= 15);
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
+        g.setTextDatum(lgfx::middle_right);
+        g.drawString(age, W - CORNER_MARGIN, Y_AGE);
+        if (stale) {
+            // Compact stale alert on the left — no space for full banner in graph mode
+            g.setTextColor(COLOR_STALE_WARN);
+            g.setTextDatum(lgfx::middle_left);
+            g.drawString("! OLD", CORNER_MARGIN, Y_AGE);
+        }
+    }
+
+    // ── Separator between header and graph ─────────────────────────
+    g.drawFastHLine(CORNER_MARGIN, GRAPH_TOP - 3,
+                    W - CORNER_MARGIN * 2, COLOR_GRAPH_BORDER);
+
+    // ── Graph: coloured zone fills (low / target / high) ───────────
+    {
+        int yHigh = sgvToY(TARGET_HIGH);
+        int yLow  = sgvToY(TARGET_LOW);
+        int yTop  = sgvToY(SGV_MAX);      // = GRAPH_TOP
+        int yBot  = sgvToY(SGV_MIN);      // = GRAPH_BOTTOM
+
+        // Low zone (below TARGET_LOW): faint red
+        g.fillRect(GRAPH_LEFT, yLow, GRAPH_W, yBot - yLow, COLOR_GRAPH_LOW_FILL);
+        // Target zone (TARGET_LOW … TARGET_HIGH): faint green
+        g.fillRect(GRAPH_LEFT, yHigh, GRAPH_W, yLow - yHigh, COLOR_GRAPH_TARGET_FILL);
+        // High zone (above TARGET_HIGH): faint orange
+        g.fillRect(GRAPH_LEFT, yTop, GRAPH_W, yHigh - yTop, COLOR_GRAPH_HIGH_FILL);
+
+        // Boundary lines — dashed effect: draw solid, visually sufficient at this scale
+        g.drawFastHLine(GRAPH_LEFT, yHigh, GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+        g.drawFastHLine(GRAPH_LEFT, yLow,  GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+    }
+
+    // ── Graph: Y-axis labels ────────────────────────────────────────
+    g.setFont(&lgfx::fonts::Font0);
+    g.setTextSize(1);
+    g.setTextDatum(lgfx::middle_right);
+    // Target boundaries (brighter)
+    g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
+    g.drawString(String(TARGET_HIGH), GRAPH_LEFT - 2, sgvToY(TARGET_HIGH));
+    g.drawString(String(TARGET_LOW),  GRAPH_LEFT - 2, sgvToY(TARGET_LOW));
+    // Top / bottom bounds (dimmer)
+    g.setTextColor(COLOR_GRAPH_AXIS);
+    g.drawString("300", GRAPH_LEFT - 2, sgvToY(300));
+    g.drawString(" 40", GRAPH_LEFT - 2, sgvToY(40));
+
+    // ── Graph: graph area border ────────────────────────────────────
+    g.drawRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_W, GRAPH_H, COLOR_GRAPH_BORDER);
+
+    // ── Graph: X-axis hour ticks + labels ──────────────────────────
+    if (g_ntpSynced && nowMs > 0) {
+        g.setFont(&lgfx::fonts::Font0);
+        g.setTextSize(1);
+        g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
+        g.setTextDatum(lgfx::top_center);
+        const int64_t hourMs = 3600000LL;
+        // First whole hour after the left edge of the window
+        int64_t firstHour = (oldestMs / hourMs + 1) * hourMs;
+        for (int64_t t = firstHour; t <= nowMs + 60000LL; t += hourMs) {
+            int x = msToX(t);
+            if (x > GRAPH_LEFT + 2 && x < GRAPH_RIGHT - 2) {
+                // Tick
+                g.drawFastVLine(x, GRAPH_BOTTOM, 4, COLOR_GRAPH_AXIS);
+                // Label
+                time_t secs = (time_t)(t / 1000LL);
+                struct tm ti;
+                localtime_r(&secs, &ti);
+                char tbuf[6];
+                strftime(tbuf, sizeof(tbuf), "%H:%M", &ti);
+                g.drawString(tbuf, x, GRAPH_BOTTOM + 2);
+            }
+        }
+    }
+
+    // ── Graph: glucose scatter dots ─────────────────────────────────
+    // Iterate oldest → newest (index g_graphHistoryLen-1 → 0).
+    // Paint older dots first so the latest reading renders on top.
+    for (int i = g_graphHistoryLen - 1; i >= 0; i--) {
+        int     sgv  = g_graphHistory[i].sgv;
+        int64_t msTs = g_graphHistory[i].dateMs;
+        if (sgv <= 0) continue;
+        if (nowMs > 0 && msTs < oldestMs) continue;
+
+        int px = (nowMs > 0) ? msToX(msTs)
+                             : (GRAPH_LEFT + i * GRAPH_W / max(1, g_graphHistoryLen));
+        int py = sgvToY(sgv);
+        if (px < GRAPH_LEFT || px > GRAPH_RIGHT) continue;
+        if (py < GRAPH_TOP  || py > GRAPH_BOTTOM) continue;
+
+        uint16_t dotColor = glucoseColor(sgv);
+        if (i == 0) {
+            // Latest reading: larger dot + outer ring for emphasis
+            g.fillCircle(px, py, 5, dotColor);
+            g.drawCircle(px, py, 7, dotColor);
+        } else {
+            g.fillCircle(px, py, 3, dotColor);
+        }
+    }
+}
+#endif  // SHOW_GRAPH
+
+// =================================================================
 // Display rendering
 // =================================================================
 static void renderDisplay() {
     const int W = lcd.width();
     const int H = lcd.height();
+
+#if SHOW_GRAPH
+    // Graph mode: compact header + history chart.
+    // Both the sprite path and the direct-LCD fallback call the same
+    // renderGraphMode() helper to avoid duplicating the drawing code.
+    if (canvas.width() == 0) {
+        lcd.fillScreen(COLOR_BACKGROUND);
+        renderGraphMode(lcd, W, H);
+        return;
+    }
+    canvas.fillSprite(COLOR_BACKGROUND);
+    renderGraphMode(canvas, W, H);
+    canvas.pushSprite(0, 0);
+    return;
+#endif  // SHOW_GRAPH
+
+    // ── Simple mode (SHOW_GRAPH = 0): original large-value layout ──
 
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.

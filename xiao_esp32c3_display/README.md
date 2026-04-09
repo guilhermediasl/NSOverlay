@@ -12,23 +12,43 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 
 ## What it shows
 
+### Simple mode (`SHOW_GRAPH 0`)
+
 ```
-┌────────────────────────┐
-│        GLICEMIA        │   ← title
-│                        │
-│       128    ^         │   ← glucose value (mg/dL) + trend arrow
-│            mg/dL       │   ← unit label
-│        +5 mg/dL        │   ← delta vs previous reading
-│        há 3 min        │   ← age of reading
-│                        │
-│ WiFi OK        NS: OK  │   ← status bar
-└────────────────────────┘
+┌──────────────────────────────────────┐
+│              16:30                   │  ← clock
+│                                      │
+│    133    →    +1                    │  ← glucose · arrow · delta (Font7)
+│                                      │
+│          2 min atras                 │  ← age of reading
+│                                      │
+│ WiFi OK                    NS: OK   │  ← status bar
+└──────────────────────────────────────┘
 ```
 
-* **Green** value = in target range  
-* **Orange** value = above target  
-* **Red** value = below target (low glucose)  
-* A **"! DADO ANTIGO !"** warning appears when the reading is ≥ 15 min old
+### Graph mode (`SHOW_GRAPH 1`, default)
+
+```
+┌──────────────────────────────────────┐
+│ 16:30                  WiFi NS:OK   │  ← clock + status (row 1)
+│       133  →  +1       2 min atras  │  ← glucose + trend (row 2-3)
+│ ─────────────────────────────────── │  ← separator
+│                           300       │
+│  ● ● ● ●    ● ● ●                  │  ← coloured scatter dots
+│           ● ●      ● ● ● ● ● ● ●  │     green = in-range
+│  ── ── ── ── ── ── ── ── ── ─ 180 │  ← TARGET_HIGH dashed line
+│  [target zone shaded green]         │
+│  ── ── ── ── ── ── ── ── ── ─  70 │  ← TARGET_LOW dashed line
+│                              40     │
+│       |           |           |     │  ← hour ticks
+│     14:00        15:00      16:00   │
+└──────────────────────────────────────┘
+```
+
+* **Green** dot = in target range · **Orange** = above target · **Red** = below target
+* **Latest reading** is drawn with a larger dot and an outer ring
+* **Stale-data** (≥ 15 min old): age label turns yellow; compact "! OLD" appears on the left
+* Green shaded zone = target range; dim-red zone = below target; dim-orange zone = above target
 
 ---
 
@@ -102,6 +122,8 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `TARGET_LOW` / `TARGET_HIGH` | Your glucose target range in mg/dL |
 | `NTP_GMT_OFFSET_SEC` | Your UTC offset in seconds (Brazil UTC-3 → `-10800`) |
 | `REFRESH_INTERVAL_MS` | How often to poll Nightscout (default 60 000 ms) |
+| `SHOW_GRAPH` | `1` (default) = graph mode · `0` = simple large-value layout |
+| `GRAPH_MINUTES` | Time window shown in graph mode (default `180` = 3 h) |
 | `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
 | `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
 
@@ -153,6 +175,13 @@ All `COLOR_*` constants in `config.h` accept:
 | `COLOR_SPLASH_TITLE` | `TFT_WHITE` | "NSOverlay" title on the boot splash |
 | `COLOR_SPLASH_ACCENT` | `RGB565(100, 210, 230)` | Cyan subtitle on the boot splash |
 | `COLOR_SPLASH_DIM` | `RGB565(150, 150, 150)` | Grey status message on the boot splash |
+| `COLOR_GRAPH_TARGET_FILL` | `RGB565(0, 40, 0)` | Dark green fill for the target zone in the graph |
+| `COLOR_GRAPH_TARGET_LINE` | `RGB565(0, 130, 0)` | Bright green boundary lines at `TARGET_LOW` / `TARGET_HIGH` |
+| `COLOR_GRAPH_LOW_FILL` | `RGB565(50, 0, 0)` | Dark red fill below the low-target zone in the graph |
+| `COLOR_GRAPH_HIGH_FILL` | `RGB565(50, 25, 0)` | Dark orange fill above the high-target zone in the graph |
+| `COLOR_GRAPH_AXIS` | `RGB565(90, 90, 90)` | Axis lines and tick marks |
+| `COLOR_GRAPH_AXIS_LABEL` | `RGB565(120, 120, 120)` | X / Y axis text labels |
+| `COLOR_GRAPH_BORDER` | `RGB565(50, 50, 50)` | Graph area border and separator line |
 
 ---
 

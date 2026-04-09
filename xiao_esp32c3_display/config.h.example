@@ -95,6 +95,26 @@
 // #include "config.h".
 #define DISPLAY_FONT  FONT_FAMILY_FREE_SANS_BOLD
 
+// ---- Graph mode -------------------------------------------------
+// Set SHOW_GRAPH to 1 to display a glucose history graph below the
+// current reading, or 0 to keep only the large current-value layout.
+//
+// When enabled the sketch fetches the last GRAPH_MINUTES of readings
+// (one entry every 5 min) so a full trend line is visible on screen.
+// The graph shows:
+//   • Coloured scatter dots (red / orange / green) per reading
+//   • Shaded target zone between TARGET_LOW and TARGET_HIGH
+//   • Dashed boundary lines at TARGET_LOW and TARGET_HIGH
+//   • Hour-boundary tick marks with HH:MM labels on the X axis
+//   • The latest reading highlighted with a larger dot + outer ring
+//
+// GRAPH_MINUTES – time window visible in the graph.
+//   Must be a multiple of 5.  Recommended values: 120, 180, 240.
+//   Larger windows need more heap for the JSON response; 240 is the
+//   practical maximum on the ESP32C3 with WiFi active.
+#define SHOW_GRAPH      1
+#define GRAPH_MINUTES   180
+
 // ---- Display colours --------------------------------------------
 // All colour constants are 16-bit RGB-565 values.
 // Use the RGB565(r,g,b) macro (defined in the sketch) for custom colours,
@@ -125,6 +145,15 @@
 // Status bar (bottom corners: "WiFi OK / ERR" and "NS: OK / ERR")
 #define COLOR_STATUS_OK     TFT_GREEN
 #define COLOR_STATUS_ERR    TFT_RED
+
+// Graph colours (only relevant when SHOW_GRAPH = 1)
+#define COLOR_GRAPH_TARGET_FILL  RGB565(  0,  40,   0)   // dark green fill between target lines
+#define COLOR_GRAPH_TARGET_LINE  RGB565(  0, 130,   0)   // brighter green boundary lines
+#define COLOR_GRAPH_LOW_FILL     RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
+#define COLOR_GRAPH_HIGH_FILL    RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
+#define COLOR_GRAPH_AXIS         RGB565( 90,  90,  90)   // axis lines / tick marks
+#define COLOR_GRAPH_AXIS_LABEL   RGB565(120, 120, 120)   // X / Y axis text
+#define COLOR_GRAPH_BORDER       RGB565( 50,  50,  50)   // graph area border
 
 // Splash screen
 #define COLOR_SPLASH_TITLE  TFT_WHITE
