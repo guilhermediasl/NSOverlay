@@ -205,8 +205,10 @@ static String ageLabel(int64_t dateMs) {
 // Nightscout fetch
 // =================================================================
 static bool fetchNightscout() {
+    Serial.println("[NS] Fetching data...");
     if (WiFi.status() != WL_CONNECTED) {
         g_error = "WiFi desconectado";
+        Serial.println("[NS] Aborted: WiFi not connected");
         return false;
     }
 
@@ -229,6 +231,8 @@ static bool fetchNightscout() {
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
         g_error = "HTTP " + String(code);
+        Serial.print("[NS] HTTP error: ");
+        Serial.println(code);
         http.end();
         return false;
     }
@@ -240,12 +244,15 @@ static bool fetchNightscout() {
     DeserializationError err = deserializeJson(doc, body);
     if (err || !doc.is<JsonArray>()) {
         g_error = "JSON invalido";
+        Serial.print("[NS] JSON parse error: ");
+        Serial.println(err.c_str());
         return false;
     }
 
     JsonArray arr = doc.as<JsonArray>();
     if (arr.size() == 0) {
         g_error = "Sem leituras";
+        Serial.println("[NS] No readings in response");
         return false;
     }
 
@@ -261,6 +268,12 @@ static bool fetchNightscout() {
 
     g_reading = r;
     g_error   = "";
+    Serial.print("[NS] sgv=");
+    Serial.print(r.sgv);
+    Serial.print(" delta=");
+    Serial.print(r.delta);
+    Serial.print(" dir=");
+    Serial.println(r.direction);
     return true;
 }
 
@@ -376,6 +389,9 @@ static void showSplash(const String& msg) {
 // WiFi + NTP
 // =================================================================
 static void connectWiFi() {
+    Serial.print("[WiFi] Connecting to ");
+    Serial.println(WIFI_SSID);
+
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(true);  // reset any in-progress connection attempt
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -385,10 +401,20 @@ static void connectWiFi() {
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 20000UL) {
         delay(500);
+        Serial.print('.');
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("[WiFi] Connected, IP: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("[WiFi] Connection failed (timeout)");
     }
 }
 
 static void syncNTP() {
+    Serial.println("[NTP] Syncing time...");
     configTime(NTP_GMT_OFFSET_SEC, NTP_DST_OFFSET_SEC, NTP_SERVER);
     struct tm timeinfo;
     unsigned long start = millis();
@@ -396,6 +422,14 @@ static void syncNTP() {
         delay(200);
     }
     g_ntpSynced = getLocalTime(&timeinfo);
+    if (g_ntpSynced) {
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+        Serial.print("[NTP] Synced: ");
+        Serial.println(buf);
+    } else {
+        Serial.println("[NTP] Sync failed");
+    }
 }
 
 // =================================================================
@@ -403,6 +437,7 @@ static void syncNTP() {
 // =================================================================
 void setup() {
     Serial.begin(115200);
+    Serial.println("\n[NSOverlay] Booting...");
 
     // --- Initialise display -------------------------------------
     lcd.init();
@@ -450,6 +485,9 @@ void loop() {
     // Periodic data refresh
     if (now - g_lastFetchMs >= REFRESH_INTERVAL_MS) {
         g_lastFetchMs = now;
+        Serial.print("[Loop] Refresh at ");
+        Serial.print(now / 1000);
+        Serial.println("s");
         fetchNightscout();
     }
 
