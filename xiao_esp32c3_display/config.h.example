@@ -120,6 +120,13 @@
 // GRAPH_ZONE_FILLS – set to 1 (default) to paint faint coloured
 //   backgrounds in the low / target / high zones, or 0 for a clean
 //   black-background graph with only the boundary lines shown.
+// GRAPH_ENTRY_INTERVAL – expected gap between CGM readings in minutes.
+//   Standard CGMs (Dexcom, Libre, Medtronic) record every 5 minutes → use 5.
+//   Some Nightscout configurations or bridge apps log every 1 minute → use 1.
+//   This controls how many entries are fetched: GRAPH_MINUTES / GRAPH_ENTRY_INTERVAL + 4.
+//   Setting it too high means less data fills the graph; too low just fetches
+//   slightly more entries than needed (no visual impact, small extra payload).
+#define GRAPH_ENTRY_INTERVAL 5
 #define SHOW_GRAPH       1
 #define GRAPH_MINUTES    180
 #define GRAPH_ZONE_FILLS 1

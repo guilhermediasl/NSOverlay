@@ -176,7 +176,7 @@ static unsigned long  g_lastFetchMs = 0;
 // Nightscout returns entries newest-first; we store them in the same
 // order so g_graphHistory[0] is always the most-recent reading.
 #if SHOW_GRAPH
-    static const int GRAPH_MAX_POINTS = 50;  // buffer size; comfortably holds up to ~4 h at 5-min intervals
+    static const int GRAPH_MAX_POINTS = 200;  // buffer size; holds up to 200 min at 1-min intervals or 16+ h at 5-min intervals
     struct GraphPoint { int sgv; int64_t dateMs; };
     static GraphPoint g_graphHistory[GRAPH_MAX_POINTS];
     static int        g_graphHistoryLen = 0;
@@ -343,11 +343,13 @@ static bool fetchNightscout() {
         client.setHandshakeTimeout(10);  // seconds
 
         HTTPClient http;
-        // In graph mode request enough readings to fill the time window
-        // (one reading every 5 min, plus a small buffer).
-        // In simple mode only 2 readings are needed (current + previous delta).
+        // In graph mode request enough readings to fill the time window.
+        // GRAPH_ENTRY_INTERVAL is the expected gap between readings in minutes
+        // (5 for standard CGM, 1 for Nightscout instances that log every minute).
+        // Requesting too many entries just means a slightly larger HTTP payload;
+        // the sketch will store at most GRAPH_MAX_POINTS entries.
 #if SHOW_GRAPH
-        const int fetchCount = min(GRAPH_MAX_POINTS, (GRAPH_MINUTES / 5) + 4);  // +4 buffer for readings arriving during fetch / minor clock drift
+        const int fetchCount = min(GRAPH_MAX_POINTS, GRAPH_MINUTES / GRAPH_ENTRY_INTERVAL + 4);
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=" + String(fetchCount);
 #else
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
@@ -377,11 +379,13 @@ static bool fetchNightscout() {
         String body = http.getString();
         http.end();
 
-        // In graph mode the response can be 36+ entries (~10 KB JSON).
+        // In graph mode the response can be many entries.
         // Use DynamicJsonDocument (heap) to avoid overflowing the 8 KB task stack.
+        // Capacity is scaled to the actual fetch count (~200 bytes per entry in
+        // ArduinoJson's internal representation covers a typical Nightscout entry).
         // In simple mode 2 KB on the stack is fine.
 #if SHOW_GRAPH
-        DynamicJsonDocument doc(12288);  // 12 KB heap: fits ~36+ entries (~10 KB JSON) with overhead
+        DynamicJsonDocument doc(fetchCount * 200 + 1024);
 #else
         StaticJsonDocument<2048> doc;
 #endif
@@ -456,14 +460,17 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 
     // ── Layout constants ───────────────────────────────────────────
     // Header occupies the top HEADER_H pixels.  Everything below is graph.
-    const int HEADER_H   = 54;  // total header height
-    const int SEP_X      = 88;  // x of vertical rule separating left/right header columns
-    const int MARGIN     = 7;   // horizontal inset from left/right screen edges
-    // Left column  : x in [MARGIN .. SEP_X-3]
-    // Right column : x in [SEP_X+4 .. W-MARGIN]
+    //
+    // Header structure:
+    //   Left column  [MARGIN … SEP_X-1] : clock (FONT_MEDIUM) + age + WiFi/NS
+    //   Vertical rule at SEP_X
+    //   Right column [SEP_X+5 … W-MARGIN]: glucose + slim arrow + (delta) — centred
+    const int HEADER_H   = 56;   // total header height
+    const int SEP_X      = 92;   // x of vertical rule
+    const int MARGIN     = 6;    // horizontal inset from screen edges
     const int L_X        = MARGIN;
-    const int R_X        = SEP_X + 5;   // left edge of the right column
-    const int R_CX       = (R_X + W - MARGIN) / 2;  // horizontal centre of right column
+    const int R_X        = SEP_X + 5;   // left edge of right column
+    const int ARROW_SZ   = 11;          // slim arrow; at sz=11, T=1 so shaft is 2 px wide
 
     // Graph area (below header separator)
     const int GRAPH_TOP    = HEADER_H + 3;
@@ -531,79 +538,88 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / windowMs);
     };
 
-    // ── Header: right column — glucose (hero element) ─────────────
-    // Draw this first so the left column and rule paint on top
-    // giving a clean visual layering in the direct-LCD fallback path.
-    if (!g_reading.valid) {
-        g.setFont(&FONT_MEDIUM);
-        g.setTextSize(1);
-        g.setTextColor(COLOR_ERROR);
-        g.setTextDatum(lgfx::middle_center);
-        g.drawString(g_error.length() > 0 ? g_error : "Aguarde...", R_CX, HEADER_H / 2);
-    } else {
-        uint16_t col = glucoseColor(g_reading.sgv);
+    // ── Header: right column — glucose + arrow + (delta) ──────────
+    // The entire group is centred horizontally inside the right column.
+    // Arrow centre is placed at startX + glucoseW + ARROW_SZ + 4 so its
+    // left edge (arrowCX - ARROW_SZ) always lands 4 px to the right of
+    // the glucose text, preventing overlap for all arrow types.
+    {
+        const int hCY      = HEADER_H / 2;  // vertical centre of header = 28
+        const int rightColW = (W - MARGIN) - R_X;
 
-        // Large glucose number — left-aligned from R_X, vertically centred
-        // at y = HEADER_H/2.
-        g.setFont(&FONT_LARGE);
-        g.setTextSize(1);
-        g.setTextColor(col);
-        g.setTextDatum(lgfx::middle_left);
-        String glucoseStr = String(g_reading.sgv);
-        g.drawString(glucoseStr, R_X, HEADER_H / 2 - 4);
+        if (!g_reading.valid) {
+            g.setFont(&FONT_MEDIUM);
+            g.setTextSize(1);
+            g.setTextColor(COLOR_ERROR);
+            g.setTextDatum(lgfx::middle_center);
+            g.drawString(g_error.length() > 0 ? g_error : "Aguarde...",
+                         R_X + rightColW / 2, hCY);
+        } else {
+            uint16_t col = glucoseColor(g_reading.sgv);
 
-        // Trend arrow — positioned right of the glucose text using the
-        // measured pixel width so 2-digit and 3-digit values both look right.
-        int glucoseW = g.textWidth(glucoseStr);
-        int arrowCX  = R_X + glucoseW + 8;
-        drawTrendArrow(g, g_reading.direction, arrowCX, HEADER_H / 2 - 4, col, 14);
+            // Measure element widths so we can center the whole group.
+            g.setFont(&FONT_LARGE);
+            g.setTextSize(1);
+            String glucoseStr = String(g_reading.sgv);
+            String deltaStr   = "(" + String(g_reading.delta >= 0 ? "+" : "") +
+                                String(g_reading.delta) + ")";
+            int glucoseW = g.textWidth(glucoseStr);
+            int deltaW   = g.textWidth(deltaStr);
+            // Group: glucose | 4px gap | arrow (2*ARROW_SZ) | 4px gap | delta
+            int totalW   = glucoseW + 4 + ARROW_SZ * 2 + 4 + deltaW;
+            int startX   = R_X + max(0, (rightColW - totalW) / 2);
 
-        // Delta — right of arrow
-        String deltaStr = (g_reading.delta >= 0 ? "+" : "") + String(g_reading.delta);
-        g.setFont(&lgfx::fonts::Font0);
-        g.setTextSize(1);
-        g.setTextColor(col);
-        g.setTextDatum(lgfx::middle_left);
-        g.drawString(deltaStr, arrowCX + 17, HEADER_H / 2 - 4);
+            // Glucose number
+            g.setTextColor(col);
+            g.setTextDatum(lgfx::middle_left);
+            g.drawString(glucoseStr, startX, hCY);
+
+            // Trend arrow — centre placed so left edge is 4 px right of glucose
+            int arrowCX = startX + glucoseW + 4 + ARROW_SZ;
+            drawTrendArrow(g, g_reading.direction, arrowCX, hCY, col, ARROW_SZ);
+
+            // Delta in parentheses, same FONT_LARGE as glucose
+            g.setFont(&FONT_LARGE);
+            g.setTextSize(1);
+            g.setTextColor(col);
+            g.setTextDatum(lgfx::middle_left);
+            g.drawString(deltaStr, arrowCX + ARROW_SZ + 4, hCY);
+        }
     }
 
     // ── Header: left column — clock / age / WiFi+NS ───────────────
-    // Clock (FONT_SMALL, top of column)
-    String clk = clockString();
-    if (clk.length() > 0) {
-        g.setFont(&FONT_SMALL);
-        g.setTextSize(1);
-        g.setTextColor(COLOR_CLOCK);
-        g.setTextDatum(lgfx::middle_left);
-        g.drawString(clk, L_X, 14);
+    // Row 1 (y≈17): Clock in FONT_MEDIUM (larger, more readable)
+    // Row 2 (y≈37): Age of reading (Font0)  —  "! STALE" prefix when old
+    // Row 3 (y≈50): WiFi  NS  status (Font0, coloured)
+    {
+        String clk = clockString();
+        if (clk.length() > 0) {
+            g.setFont(&FONT_MEDIUM);
+            g.setTextSize(1);
+            g.setTextColor(COLOR_CLOCK);
+            g.setTextDatum(lgfx::middle_left);
+            g.drawString(clk, L_X, 17);
+        }
     }
-
-    // Age of reading (Font0, middle of column)
     if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
         int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
         bool stale = (ageMin >= 15);
-        String age = ageLabel(g_reading.dateMs);
+        String age = (stale ? "! " : "") + ageLabel(g_reading.dateMs);
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(age, L_X, 29);
-        if (stale) {
-            g.setTextColor(COLOR_STALE_WARN);
-            g.drawString("! OLD", L_X, 40);
-        }
+        g.drawString(age, L_X, 37);
     }
-
-    // WiFi + NS status (Font0, bottom of column)
     {
         bool wifiOk = (WiFi.status() == WL_CONNECTED);
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextDatum(lgfx::middle_left);
         g.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(wifiOk ? "WiFi" : "WiFi!", L_X, 44);
+        g.drawString(wifiOk ? "WiFi" : "WiFi!", L_X, 50);
         g.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(g_reading.valid ? " NS" : " NS!", L_X + 26, 44);
+        g.drawString(g_reading.valid ? " NS" : " NS!", L_X + 26, 50);
     }
 
     // ── Header: vertical rule ──────────────────────────────────────

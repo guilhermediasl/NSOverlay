@@ -124,6 +124,7 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `REFRESH_INTERVAL_MS` | How often to poll Nightscout (default 60 000 ms) |
 | `SHOW_GRAPH` | `1` (default) = graph mode · `0` = simple large-value layout |
 | `GRAPH_MINUTES` | Time window shown in graph mode (default `180` = 3 h) |
+| `GRAPH_ENTRY_INTERVAL` | Expected gap between CGM readings in minutes (default `5`; set to `1` if your Nightscout logs every minute) |
 | `GRAPH_ZONE_FILLS` | `1` (default) = draw faint coloured zone backgrounds · `0` = clean black background |
 | `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
 | `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
