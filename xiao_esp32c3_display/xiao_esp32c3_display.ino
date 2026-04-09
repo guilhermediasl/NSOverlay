@@ -171,9 +171,9 @@ static String sha1Hex(const String& input) {
 static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
                            int cx, int cy, uint16_t col) {
     const int SZ = 20;  // half-size of arrow bounding box
-    const int HW = 14;  // arrowhead half-width (perpendicular to direction)
-    const int T  = 5;   // shaft half-thickness
-    const int hw = 10;  // diagonal arrowhead half-width (~HW * 0.7)
+    const int HW = 9;   // arrowhead half-width (perpendicular to direction)
+    const int T  = 3;   // shaft half-thickness
+    const int hw = 7;   // diagonal arrowhead half-width (~HW * 0.7)
 
     if (dir == "DoubleUp") {
         // Two stacked arrowheads pointing up + short shaft below
@@ -360,20 +360,24 @@ static void renderDisplay() {
 
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.
-    //   Row 1 – clock (top-center, Font4)           y = 22
-    //   Row 2 – glucose (Font7) + delta left (Font4) + arrow right
-    //           all share y = 95 (middle datum)
-    //   Row 3 – age of reading (Font4, centre)       y = 175
-    //   Row 4 – stale-data warning (if any, Font2)   y = 207
-    //   Row 5 – WiFi / NS status bar (Font0, bottom) y = H-10
-    const int CORNER_MARGIN = 16;  // horizontal inset from left/right edges
+    //   Row 1 – clock (top-center, Font4)                  y = 22
+    //   Row 2 – [glucose | arrow | delta] all at y = 95
+    //           glucose: middle_center at GLUCOSE_X (~95)
+    //           arrow:   centre at ARROW_CX (~175)
+    //           delta:   middle_left at DELTA_X (~203), same colour as glucose
+    //   Row 3 – age of reading (Font2, centre)              y = 175
+    //   Row 4 – stale-data warning (if any, Font2)          y = 207
+    //   Row 5 – WiFi / NS status bar (Font0, bottom)        y = H-10
+    const int CORNER_MARGIN = 16;   // horizontal inset from left/right edges
     const int Y_CLOCK   = 22;
     const int Y_GLUCOSE = 95;
     const int Y_AGE     = 175;
     const int Y_STALE   = 207;
     const int Y_STATUS  = H - 10;
-    // Arrow center: leave SZ(20) + 2 px padding from the corner margin
-    const int ARROW_CX  = W - CORNER_MARGIN - 22;
+    // Horizontal positions for the inline glucose row
+    const int GLUCOSE_X = 95;    // middle_center x for glucose number
+    const int ARROW_CX  = 175;   // centre of trend arrow (SZ=20, spans 155-195)
+    const int DELTA_X   = 203;   // middle_left x for delta text (ARROW_CX + SZ + 8)
 
     String clk = clockString();
 
@@ -400,27 +404,27 @@ static void renderDisplay() {
         } else {
             uint16_t col = glucoseColor(g_reading.sgv);
 
-            // ---- Large glucose value (7-segment style, centred) -----
+            // ---- Large glucose value (Font7, shifted left) ----------
             lcd.setFont(&lgfx::fonts::Font7);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(String(g_reading.sgv), W / 2, Y_GLUCOSE);
+            lcd.drawString(String(g_reading.sgv), GLUCOSE_X, Y_GLUCOSE);
 
-            // ---- Delta – inline left, same Y as glucose -------------
+            // ---- Trend arrow – graphical, centre of row -------------
+            drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
+
+            // ---- Delta – right of arrow, same colour as glucose -----
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                               + String(g_reading.delta);
             lcd.setFont(&lgfx::fonts::Font4);
-            lcd.setTextColor(lcd.color565(100, 210, 230));
+            lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_left);
-            lcd.drawString(deltaStr, CORNER_MARGIN, Y_GLUCOSE);
+            lcd.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-            // ---- Trend arrow – graphical, inline right ---------------
-            drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
-
-            // ---- Age of reading (Font4, more visible) ----------------
+            // ---- Age of reading (Font2) ------------------------------
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
-                lcd.setFont(&lgfx::fonts::Font4);
+                lcd.setFont(&lgfx::fonts::Font2);
                 lcd.setTextColor(lcd.color565(210, 210, 210));
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
@@ -473,27 +477,27 @@ static void renderDisplay() {
     } else {
         uint16_t col = glucoseColor(g_reading.sgv);
 
-        // ---- Large glucose value (7-segment style, centred) -----
+        // ---- Large glucose value (Font7, shifted left) ----------
         canvas.setFont(&lgfx::fonts::Font7);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(String(g_reading.sgv), W / 2, Y_GLUCOSE);
+        canvas.drawString(String(g_reading.sgv), GLUCOSE_X, Y_GLUCOSE);
 
-        // ---- Delta – inline left, same Y as glucose -------------
+        // ---- Trend arrow – graphical, centre of row -------------
+        drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
+
+        // ---- Delta – right of arrow, same colour as glucose -----
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                           + String(g_reading.delta);
         canvas.setFont(&lgfx::fonts::Font4);
-        canvas.setTextColor(lcd.color565(100, 210, 230));
+        canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_left);
-        canvas.drawString(deltaStr, CORNER_MARGIN, Y_GLUCOSE);
+        canvas.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
-        // ---- Trend arrow – graphical, inline right ---------------
-        drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
-
-        // ---- Age of reading (Font4, more visible) ----------------
+        // ---- Age of reading (Font2) -----------------------------
         String age = ageLabel(g_reading.dateMs);
         if (age.length() > 0) {
-            canvas.setFont(&lgfx::fonts::Font4);
+            canvas.setFont(&lgfx::fonts::Font2);
             canvas.setTextColor(lcd.color565(210, 210, 210));
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
