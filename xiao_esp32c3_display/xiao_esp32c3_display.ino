@@ -52,8 +52,45 @@
 // ---- mbedtls SHA-1 (bundled with ESP32 Arduino core) ------------
 #include "mbedtls/md.h"
 
+// ---- Compile-time helpers (must be defined before config.h) -----
+
+// Convert 8-bit R, G, B to a 16-bit RGB-565 value at compile time.
+// Use this macro in config.h for any COLOR_* constant that is not a TFT_
+// colour name.  Example: #define COLOR_FOO  RGB565(100, 210, 230)
+#define RGB565(r, g, b) \
+    ((uint16_t)(((uint16_t)((r) & 0xF8u) << 8) | \
+                ((uint16_t)((g) & 0xFCu) << 3) | \
+                ((b) >> 3)))
+
+// Font-family identifiers.  Set DISPLAY_FONT in config.h to one of these.
+#define FONT_FAMILY_FREE_SANS_BOLD  1   // bold proportional sans-serif (default)
+#define FONT_FAMILY_FREE_SANS       2   // regular proportional sans-serif
+#define FONT_FAMILY_FREE_MONO       3   // fixed-width monospaced
+#define FONT_FAMILY_FREE_SERIF      4   // traditional serif
+
 // ---- Project config ---------------------------------------------
 #include "config.h"
+
+// ---- Font size variants (resolved from DISPLAY_FONT in config.h) -
+#if   DISPLAY_FONT == FONT_FAMILY_FREE_SANS_BOLD
+#  define FONT_LARGE   lgfx::fonts::FreeSansBold18pt7b
+#  define FONT_MEDIUM  lgfx::fonts::FreeSans12pt7b
+#  define FONT_SMALL   lgfx::fonts::FreeSans9pt7b
+#elif DISPLAY_FONT == FONT_FAMILY_FREE_SANS
+#  define FONT_LARGE   lgfx::fonts::FreeSans18pt7b
+#  define FONT_MEDIUM  lgfx::fonts::FreeSans12pt7b
+#  define FONT_SMALL   lgfx::fonts::FreeSans9pt7b
+#elif DISPLAY_FONT == FONT_FAMILY_FREE_MONO
+#  define FONT_LARGE   lgfx::fonts::FreeMono18pt7b
+#  define FONT_MEDIUM  lgfx::fonts::FreeMono12pt7b
+#  define FONT_SMALL   lgfx::fonts::FreeMono9pt7b
+#elif DISPLAY_FONT == FONT_FAMILY_FREE_SERIF
+#  define FONT_LARGE   lgfx::fonts::FreeSerif18pt7b
+#  define FONT_MEDIUM  lgfx::fonts::FreeSerif12pt7b
+#  define FONT_SMALL   lgfx::fonts::FreeSerif9pt7b
+#else
+#  error "DISPLAY_FONT must be one of: FONT_FAMILY_FREE_SANS_BOLD, FONT_FAMILY_FREE_SANS, FONT_FAMILY_FREE_MONO, FONT_FAMILY_FREE_SERIF"
+#endif
 
 // =================================================================
 // Display driver – Waveshare 1.69" ST7789, 240×280
@@ -227,9 +264,9 @@ static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
 
 // 16-bit colour based on glucose level.
 static uint16_t glucoseColor(int sgv) {
-    if (sgv > 0 && sgv < TARGET_LOW)   return lcd.color565(220,  60,  60);  // red
-    if (sgv > TARGET_HIGH)             return lcd.color565(255, 150,   0);  // orange
-    return                                    lcd.color565( 60, 210,  80);  // green
+    if (sgv > 0 && sgv < TARGET_LOW)   return COLOR_GLUCOSE_LOW;
+    if (sgv > TARGET_HIGH)             return COLOR_GLUCOSE_HIGH;
+    return                                    COLOR_GLUCOSE_OK;
 }
 
 // Human-readable age of the last reading (in Portuguese).
@@ -385,20 +422,20 @@ static void renderDisplay() {
     // If the off-screen sprite could not be allocated, fall back to
     // rendering directly on the LCD (with some flicker accepted).
     if (canvas.width() == 0) {
-        lcd.fillScreen(TFT_BLACK);
+        lcd.fillScreen(COLOR_BACKGROUND);
 
         // ---- Clock (top-center, prominent) -------------------------
         if (clk.length() > 0) {
-            lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
+            lcd.setFont(&FONT_LARGE);
             lcd.setTextSize(1);
-            lcd.setTextColor(TFT_WHITE);
+            lcd.setTextColor(COLOR_CLOCK);
             lcd.setTextDatum(lgfx::top_center);
             lcd.drawString(clk, W / 2, Y_CLOCK);
         }
 
         if (!g_reading.valid) {
-            lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
-            lcd.setTextColor(TFT_RED);
+            lcd.setFont(&FONT_LARGE);
+            lcd.setTextColor(COLOR_ERROR);
             lcd.setTextDatum(lgfx::middle_center);
             String msg = g_error.length() > 0 ? g_error : "Aguarde...";
             lcd.drawString(msg, W / 2, H / 2);
@@ -432,8 +469,8 @@ static void renderDisplay() {
                     int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                     stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
                 }
-                lcd.setFont(&lgfx::fonts::FreeSans12pt7b);
-                lcd.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
+                lcd.setFont(&FONT_MEDIUM);
+                lcd.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
             }
@@ -444,8 +481,8 @@ static void renderDisplay() {
                 int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                 int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
                 if (ageMin >= 15) {
-                    lcd.setFont(&lgfx::fonts::FreeSans9pt7b);
-                    lcd.setTextColor(TFT_YELLOW);
+                    lcd.setFont(&FONT_SMALL);
+                    lcd.setTextColor(COLOR_STALE_WARN);
                     lcd.setTextDatum(lgfx::middle_center);
                     lcd.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
                 }
@@ -456,29 +493,29 @@ static void renderDisplay() {
         lcd.setFont(&lgfx::fonts::Font0);
         lcd.setTextSize(1);
         lcd.setTextDatum(lgfx::bottom_left);
-        lcd.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
+        lcd.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
         lcd.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", CORNER_MARGIN, Y_STATUS);
         lcd.setTextDatum(lgfx::bottom_right);
-        lcd.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
+        lcd.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
         lcd.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - CORNER_MARGIN, Y_STATUS);
         return;
     }
 
-    canvas.fillSprite(TFT_BLACK);
+    canvas.fillSprite(COLOR_BACKGROUND);
 
     // ---- Clock (top-center, prominent) --------------------------
     if (clk.length() > 0) {
-        canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
+        canvas.setFont(&FONT_LARGE);
         canvas.setTextSize(1);
-        canvas.setTextColor(TFT_WHITE);
+        canvas.setTextColor(COLOR_CLOCK);
         canvas.setTextDatum(lgfx::top_center);
         canvas.drawString(clk, W / 2, Y_CLOCK);
     }
 
     if (!g_reading.valid) {
         // ---- Error / loading state ------------------------------
-        canvas.setTextColor(TFT_RED);
-        canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
+        canvas.setTextColor(COLOR_ERROR);
+        canvas.setFont(&FONT_LARGE);
         canvas.setTextDatum(lgfx::middle_center);
         String msg = g_error.length() > 0 ? g_error : "Aguarde...";
         canvas.drawString(msg, W / 2, H / 2);
@@ -512,8 +549,8 @@ static void renderDisplay() {
                 int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
                 stale = ((nowMs - g_reading.dateMs) / 60000LL) >= 15;
             }
-            canvas.setFont(&lgfx::fonts::FreeSans12pt7b);
-            canvas.setTextColor(stale ? TFT_YELLOW : lcd.color565(210, 210, 210));
+            canvas.setFont(&FONT_MEDIUM);
+            canvas.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
         }
@@ -525,8 +562,8 @@ static void renderDisplay() {
             int64_t nowMs  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
             int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
             if (ageMin >= 15) {
-                canvas.setFont(&lgfx::fonts::FreeSans9pt7b);
-                canvas.setTextColor(TFT_YELLOW);
+                canvas.setFont(&FONT_SMALL);
+                canvas.setTextColor(COLOR_STALE_WARN);
                 canvas.setTextDatum(lgfx::middle_center);
                 canvas.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
             }
@@ -539,11 +576,11 @@ static void renderDisplay() {
     canvas.setTextSize(1);
 
     canvas.setTextDatum(lgfx::bottom_left);
-    canvas.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
+    canvas.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
     canvas.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", CORNER_MARGIN, Y_STATUS);
 
     canvas.setTextDatum(lgfx::bottom_right);
-    canvas.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
+    canvas.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
     canvas.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - CORNER_MARGIN, Y_STATUS);
 
     canvas.pushSprite(0, 0);
@@ -553,25 +590,25 @@ static void renderDisplay() {
 static void showSplash(const String& msg) {
     // Direct-LCD fallback when sprite is unavailable.
     if (canvas.width() == 0) {
-        lcd.fillScreen(TFT_BLACK);
-        lcd.setFont(&lgfx::fonts::FreeSansBold18pt7b);
-        lcd.setTextColor(TFT_WHITE);
+        lcd.fillScreen(COLOR_BACKGROUND);
+        lcd.setFont(&FONT_LARGE);
+        lcd.setTextColor(COLOR_SPLASH_TITLE);
         lcd.setTextDatum(lgfx::middle_center);
         lcd.drawString("NSOverlay", lcd.width() / 2, lcd.height() / 2 - 20);
-        lcd.setFont(&lgfx::fonts::FreeSans9pt7b);
-        lcd.setTextColor(lcd.color565(100, 210, 230));
+        lcd.setFont(&FONT_SMALL);
+        lcd.setTextColor(COLOR_SPLASH_ACCENT);
         lcd.drawString(msg, lcd.width() / 2, lcd.height() / 2 + 20);
         return;
     }
-    canvas.fillSprite(TFT_BLACK);
-    canvas.setFont(&lgfx::fonts::FreeSansBold18pt7b);
-    canvas.setTextColor(TFT_WHITE);
+    canvas.fillSprite(COLOR_BACKGROUND);
+    canvas.setFont(&FONT_LARGE);
+    canvas.setTextColor(COLOR_SPLASH_TITLE);
     canvas.setTextDatum(lgfx::middle_center);
     canvas.drawString("NSOverlay", lcd.width() / 2, lcd.height() / 2 - 20);
-    canvas.setFont(&lgfx::fonts::FreeSans9pt7b);
-    canvas.setTextColor(lcd.color565(100, 210, 230));
+    canvas.setFont(&FONT_SMALL);
+    canvas.setTextColor(COLOR_SPLASH_ACCENT);
     canvas.drawString("XIAO ESP32C3", lcd.width() / 2, lcd.height() / 2 + 12);
-    canvas.setTextColor(lcd.color565(150, 150, 150));
+    canvas.setTextColor(COLOR_SPLASH_DIM);
     canvas.drawString(msg, lcd.width() / 2, lcd.height() / 2 + 36);
     canvas.pushSprite(0, 0);
 }
@@ -640,7 +677,7 @@ void setup() {
     // (SPI pins, CS, DC or RST not connected correctly).
     lcd.fillScreen(lcd.color565(0, 100, 255));
     delay(300);
-    lcd.fillScreen(TFT_BLACK);
+    lcd.fillScreen(COLOR_BACKGROUND);
 
     // --- Create off-screen sprite (eliminates flicker) ----------
     canvas.setColorDepth(8);   // 8-bit saves ~67 KB vs 16-bit ~134 KB; fits ESP32C3 heap after WiFi

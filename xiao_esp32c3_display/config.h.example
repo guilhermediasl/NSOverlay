@@ -78,3 +78,55 @@
 
 // BL PWM brightness 0-255 (255 = full brightness)
 #define LCD_BRIGHTNESS  200
+
+// ---- Display font -----------------------------------------------
+// Choose the font family used for all UI labels.
+// The glucose number always uses the built-in 7-segment Font7; the
+// font family below controls every other piece of text.
+//
+// Supported values (see the "Compatible fonts" table in README.md):
+//   FONT_FAMILY_FREE_SANS_BOLD  (default — bold Helvetica-style, best readability)
+//   FONT_FAMILY_FREE_SANS       (lighter variant of the same family)
+//   FONT_FAMILY_FREE_MONO       (fixed-width — good for digital/retro look)
+//   FONT_FAMILY_FREE_SERIF      (traditional serif, similar to Times New Roman)
+//
+// Note: FONT_FAMILY_* identifiers are defined in the sketch, not here.
+// They are available in config.h because the sketch defines them before
+// #include "config.h".
+#define DISPLAY_FONT  FONT_FAMILY_FREE_SANS_BOLD
+
+// ---- Display colours --------------------------------------------
+// All colour constants are 16-bit RGB-565 values.
+// Use the RGB565(r,g,b) macro (defined in the sketch) for custom colours,
+// or any TFT_* constant from LovyanGFX (TFT_BLACK, TFT_WHITE, TFT_RED, …).
+// The defaults match the colour scheme of the Windows NSOverlay application.
+
+// Background
+#define COLOR_BACKGROUND    TFT_BLACK
+
+// Glucose number colour — changes with the reading value
+#define COLOR_GLUCOSE_LOW   RGB565(220,  60,  60)   // red   – reading below TARGET_LOW
+#define COLOR_GLUCOSE_HIGH  RGB565(255, 150,   0)   // orange – reading above TARGET_HIGH
+#define COLOR_GLUCOSE_OK    RGB565( 60, 210,  80)   // green  – reading in target range
+
+// Clock
+#define COLOR_CLOCK         TFT_WHITE
+
+// Age-of-reading label ("X min atras")
+#define COLOR_AGE_NORMAL    RGB565(210, 210, 210)   // light grey when fresh
+#define COLOR_AGE_STALE     TFT_YELLOW               // turns yellow when reading ≥ 15 min old
+
+// Stale-data warning banner ("! DADO ANTIGO !")
+#define COLOR_STALE_WARN    TFT_YELLOW
+
+// Error / loading message
+#define COLOR_ERROR         TFT_RED
+
+// Status bar (bottom corners: "WiFi OK / ERR" and "NS: OK / ERR")
+#define COLOR_STATUS_OK     TFT_GREEN
+#define COLOR_STATUS_ERR    TFT_RED
+
+// Splash screen
+#define COLOR_SPLASH_TITLE  TFT_WHITE
+#define COLOR_SPLASH_ACCENT RGB565(100, 210, 230)   // cyan — subtitle / boot status
+#define COLOR_SPLASH_DIM    RGB565(150, 150, 150)   // grey  — secondary message

@@ -102,6 +102,59 @@ Copy `config.h.example` to `config.h`, then fill in:
 | `TARGET_LOW` / `TARGET_HIGH` | Your glucose target range in mg/dL |
 | `NTP_GMT_OFFSET_SEC` | Your UTC offset in seconds (Brazil UTC-3 → `-10800`) |
 | `REFRESH_INTERVAL_MS` | How often to poll Nightscout (default 60 000 ms) |
+| `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
+| `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
+
+---
+
+## Compatible fonts
+
+Set `DISPLAY_FONT` in `config.h` to one of the four families below.
+The glucose number always uses the built-in 7-segment `Font7`; `DISPLAY_FONT`
+controls every other text element (clock, age label, error message, splash screen).
+
+All fonts are bundled with the **LovyanGFX** library — no additional installation needed.
+
+| `DISPLAY_FONT` value | Appearance | Size variants used |
+|---|---|---|
+| `FONT_FAMILY_FREE_SANS_BOLD` *(default)* | Bold proportional sans-serif (Helvetica / Android style — best screen readability) | Bold 18 pt · Regular 12 pt · Regular 9 pt |
+| `FONT_FAMILY_FREE_SANS` | Regular proportional sans-serif (lighter weight, more elegant) | Regular 18 pt · 12 pt · 9 pt |
+| `FONT_FAMILY_FREE_MONO` | Fixed-width monospaced (digital / retro look, numbers align vertically) | Mono 18 pt · 12 pt · 9 pt |
+| `FONT_FAMILY_FREE_SERIF` | Traditional serif (similar to Times New Roman) | Serif 18 pt · 12 pt · 9 pt |
+
+> **Tip:** The full GNU FreeFont collection available in LovyanGFX also includes oblique /
+> italic and bold-oblique variants such as `FreeSansOblique12pt7b`, but these are not
+> wrapped in a family constant.  You can use individual sizes directly by assigning
+> `FONT_LARGE`, `FONT_MEDIUM`, and `FONT_SMALL` yourself after the `#include "config.h"`
+> line in the sketch.
+
+---
+
+## Display colours
+
+All `COLOR_*` constants in `config.h` accept:
+
+- Any **`TFT_*` constant** from LovyanGFX (e.g. `TFT_BLACK`, `TFT_WHITE`, `TFT_RED`, `TFT_GREEN`, `TFT_YELLOW`, `TFT_ORANGE`, `TFT_CYAN`, `TFT_BLUE`)
+- The **`RGB565(r, g, b)`** macro (defined in the sketch) — converts 8-bit R, G, B components to a 16-bit value at compile time.
+
+| Constant | Default | Used for |
+|---|---|---|
+| `COLOR_BACKGROUND` | `TFT_BLACK` | Screen background |
+| `COLOR_GLUCOSE_LOW` | `RGB565(220, 60, 60)` | Glucose value when below `TARGET_LOW` |
+| `COLOR_GLUCOSE_HIGH` | `RGB565(255, 150, 0)` | Glucose value when above `TARGET_HIGH` |
+| `COLOR_GLUCOSE_OK` | `RGB565(60, 210, 80)` | Glucose value when in target range |
+| `COLOR_CLOCK` | `TFT_WHITE` | Clock text (top row) |
+| `COLOR_AGE_NORMAL` | `RGB565(210, 210, 210)` | Age-of-reading label when data is fresh |
+| `COLOR_AGE_STALE` | `TFT_YELLOW` | Age-of-reading label when data is ≥ 15 min old |
+| `COLOR_STALE_WARN` | `TFT_YELLOW` | `! DADO ANTIGO !` warning banner |
+| `COLOR_ERROR` | `TFT_RED` | Error / loading message |
+| `COLOR_STATUS_OK` | `TFT_GREEN` | `WiFi OK` / `NS: OK` in the status bar |
+| `COLOR_STATUS_ERR` | `TFT_RED` | `WiFi ERR` / `NS: ERR` in the status bar |
+| `COLOR_SPLASH_TITLE` | `TFT_WHITE` | "NSOverlay" title on the boot splash |
+| `COLOR_SPLASH_ACCENT` | `RGB565(100, 210, 230)` | Cyan subtitle on the boot splash |
+| `COLOR_SPLASH_DIM` | `RGB565(150, 150, 150)` | Grey status message on the boot splash |
+
+---
 
 ### 4 · Upload
 
