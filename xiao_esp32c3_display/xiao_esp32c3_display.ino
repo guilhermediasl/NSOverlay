@@ -166,15 +166,63 @@ static String sha1Hex(const String& input) {
 }
 
 // Map Nightscout direction strings to readable ASCII arrows.
-static const char* trendArrow(const String& dir) {
-    if (dir == "DoubleUp")      return "^^";
-    if (dir == "SingleUp")      return "^";
-    if (dir == "FortyFiveUp")   return "/";
-    if (dir == "Flat")          return "->";
-    if (dir == "FortyFiveDown") return "\\";
-    if (dir == "SingleDown")    return "v";
-    if (dir == "DoubleDown")    return "vv";
-    return "?";
+// Draw a real graphical trend arrow centred on (cx, cy).
+// Works on any LovyanGFX drawable (LGFX_Device or LGFX_Sprite).
+static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
+                           int cx, int cy, uint16_t col) {
+    const int SZ = 20;  // half-size of arrow bounding box
+    const int HW = 14;  // arrowhead half-width (perpendicular to direction)
+    const int T  = 5;   // shaft half-thickness
+    const int hw = 10;  // diagonal arrowhead half-width (~HW * 0.7)
+
+    if (dir == "DoubleUp") {
+        // Two stacked arrowheads pointing up + short shaft below
+        g.fillRect(cx - T, cy, T * 2, SZ / 2, col);
+        g.fillTriangle(cx - HW, cy,           cx, cy - SZ * 2 / 3,
+                       cx + HW, cy,           col);
+        g.fillTriangle(cx - HW, cy - SZ * 2 / 3, cx, cy - SZ * 4 / 3,
+                       cx + HW, cy - SZ * 2 / 3, col);
+    } else if (dir == "SingleUp") {
+        g.fillRect(cx - T, cy, T * 2, SZ, col);
+        g.fillTriangle(cx - HW, cy, cx, cy - SZ, cx + HW, cy, col);
+    } else if (dir == "FortyFiveUp") {
+        // Diagonal arrow pointing upper-right
+        // Shaft parallelogram (perpendicular to direction (1,-1) is (1,1))
+        g.fillTriangle(cx - SZ + T, cy + SZ + T,
+                       cx - SZ - T, cy + SZ - T,
+                       cx - T,      cy - T,      col);
+        g.fillTriangle(cx - SZ + T, cy + SZ + T,
+                       cx + T,      cy + T,
+                       cx - T,      cy - T,      col);
+        // Arrowhead pointing to upper-right
+        g.fillTriangle(cx + SZ, cy - SZ, cx + hw, cy + hw, cx - hw, cy - hw, col);
+    } else if (dir == "Flat") {
+        g.fillRect(cx - SZ, cy - T, SZ, T * 2, col);
+        g.fillTriangle(cx, cy - HW, cx + SZ, cy, cx, cy + HW, col);
+    } else if (dir == "FortyFiveDown") {
+        // Diagonal arrow pointing lower-right
+        // Shaft parallelogram (perpendicular to direction (1,1) is (1,-1))
+        g.fillTriangle(cx - SZ + T, cy - SZ - T,
+                       cx - SZ - T, cy - SZ + T,
+                       cx - T,      cy + T,      col);
+        g.fillTriangle(cx - SZ + T, cy - SZ - T,
+                       cx + T,      cy - T,
+                       cx - T,      cy + T,      col);
+        // Arrowhead pointing to lower-right
+        g.fillTriangle(cx + SZ, cy + SZ, cx + hw, cy - hw, cx - hw, cy + hw, col);
+    } else if (dir == "SingleDown") {
+        g.fillRect(cx - T, cy - SZ, T * 2, SZ, col);
+        g.fillTriangle(cx - HW, cy, cx, cy + SZ, cx + HW, cy, col);
+    } else if (dir == "DoubleDown") {
+        // Two stacked arrowheads pointing down + short shaft above
+        g.fillRect(cx - T, cy - SZ / 2, T * 2, SZ / 2, col);
+        g.fillTriangle(cx - HW, cy,           cx, cy + SZ * 2 / 3,
+                       cx + HW, cy,           col);
+        g.fillTriangle(cx - HW, cy + SZ * 2 / 3, cx, cy + SZ * 4 / 3,
+                       cx + HW, cy + SZ * 2 / 3, col);
+    } else {
+        g.fillCircle(cx, cy, T, col);
+    }
 }
 
 // 16-bit colour based on glucose level.
@@ -222,69 +270,85 @@ static bool fetchNightscout() {
         return false;
     }
 
-    WiFiClientSecure client;
-    // TLS certificate verification is disabled for simplicity on a maker
-    // device on a trusted home network.  For stronger security, remove
-    // setInsecure() and instead call client.setCACert(<PEM string>) with
-    // the root CA certificate of your Nightscout host.
-    client.setInsecure();
+    const int MAX_RETRIES = 3;
+    for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+            Serial.print("[NS] Retry ");
+            Serial.println(attempt);
+            delay(2000);
+            if (WiFi.status() != WL_CONNECTED) {
+                g_error = "WiFi desconectado";
+                return false;
+            }
+        }
 
-    HTTPClient http;
-    String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
-    http.begin(client, url);
-    http.setTimeout(8000);
+        WiFiClientSecure client;
+        // TLS certificate verification is disabled for simplicity on a maker
+        // device on a trusted home network.  For stronger security, remove
+        // setInsecure() and instead call client.setCACert(<PEM string>) with
+        // the root CA certificate of your Nightscout host.
+        client.setInsecure();
 
-    if (strlen(API_SECRET) > 0) {
-        http.addHeader("api-secret", sha1Hex(String(API_SECRET)));
-    }
+        HTTPClient http;
+        String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
+        http.begin(client, url);
+        http.setTimeout(8000);
 
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        g_error = "HTTP " + String(code);
-        Serial.print("[NS] HTTP error: ");
-        Serial.println(code);
+        if (strlen(API_SECRET) > 0) {
+            http.addHeader("api-secret", sha1Hex(String(API_SECRET)));
+        }
+
+        int code = http.GET();
+        if (code != HTTP_CODE_OK) {
+            g_error = "HTTP " + String(code);
+            Serial.print("[NS] HTTP error: ");
+            Serial.println(code);
+            http.end();
+            continue;  // retry
+        }
+
+        String body = http.getString();
         http.end();
-        return false;
+
+        StaticJsonDocument<2048> doc;
+        DeserializationError err = deserializeJson(doc, body);
+        if (err || !doc.is<JsonArray>()) {
+            g_error = "JSON invalido";
+            Serial.print("[NS] JSON parse error: ");
+            Serial.println(err.c_str());
+            continue;
+        }
+
+        JsonArray arr = doc.as<JsonArray>();
+        if (arr.size() == 0) {
+            g_error = "Sem leituras";
+            Serial.println("[NS] No readings in response");
+            continue;
+        }
+
+        GlucoseReading r;
+        r.sgv       = arr[0]["sgv"]       | 0;
+        r.direction = arr[0]["direction"].as<String>();
+        r.dateMs    = arr[0]["date"]      | (int64_t)0;
+        r.valid     = (r.sgv > 0);
+
+        if (arr.size() >= 2) {
+            r.delta = r.sgv - (int)(arr[1]["sgv"] | 0);
+        }
+
+        g_reading = r;
+        g_error   = "";
+        Serial.print("[NS] sgv=");
+        Serial.print(r.sgv);
+        Serial.print(" delta=");
+        Serial.print(r.delta);
+        Serial.print(" dir=");
+        Serial.println(r.direction);
+        return true;
     }
 
-    String body = http.getString();
-    http.end();
-
-    StaticJsonDocument<2048> doc;
-    DeserializationError err = deserializeJson(doc, body);
-    if (err || !doc.is<JsonArray>()) {
-        g_error = "JSON invalido";
-        Serial.print("[NS] JSON parse error: ");
-        Serial.println(err.c_str());
-        return false;
-    }
-
-    JsonArray arr = doc.as<JsonArray>();
-    if (arr.size() == 0) {
-        g_error = "Sem leituras";
-        Serial.println("[NS] No readings in response");
-        return false;
-    }
-
-    GlucoseReading r;
-    r.sgv       = arr[0]["sgv"]       | 0;
-    r.direction = arr[0]["direction"].as<String>();
-    r.dateMs    = arr[0]["date"]      | (int64_t)0;
-    r.valid     = (r.sgv > 0);
-
-    if (arr.size() >= 2) {
-        r.delta = r.sgv - (int)(arr[1]["sgv"] | 0);
-    }
-
-    g_reading = r;
-    g_error   = "";
-    Serial.print("[NS] sgv=");
-    Serial.print(r.sgv);
-    Serial.print(" delta=");
-    Serial.print(r.delta);
-    Serial.print(" dir=");
-    Serial.println(r.direction);
-    return true;
+    Serial.println("[NS] All retries failed");
+    return false;
 }
 
 // =================================================================
@@ -296,19 +360,20 @@ static void renderDisplay() {
 
     // Layout constants – all corner elements use CORNER_MARGIN from each edge
     // so that rounded-corner clipping on the physical display does not cut text.
-    //   Row 1 – clock (top-center, Font4)    y = 22
-    //   Row 2 – large glucose + trend arrow  y = 95  (Font7, ~48 px, centre)
-    //   Row 3 – delta (no units)             y = 152 (Font4, ~26 px, centre)
-    //   Row 4 – age of reading               y = 185 (Font2, centre)
-    //   Row 5 – stale-data warning (if any)  y = 207 (Font2, centre)
-    //   Row 6 – WiFi / NS status bar         y = H-10 (Font0, bottom datum)
+    //   Row 1 – clock (top-center, Font4)           y = 22
+    //   Row 2 – glucose (Font7) + delta left (Font4) + arrow right
+    //           all share y = 95 (middle datum)
+    //   Row 3 – age of reading (Font4, centre)       y = 175
+    //   Row 4 – stale-data warning (if any, Font2)   y = 207
+    //   Row 5 – WiFi / NS status bar (Font0, bottom) y = H-10
     const int CORNER_MARGIN = 16;  // horizontal inset from left/right edges
     const int Y_CLOCK   = 22;
     const int Y_GLUCOSE = 95;
-    const int Y_DELTA   = 152;
-    const int Y_AGE     = 185;
+    const int Y_AGE     = 175;
     const int Y_STALE   = 207;
     const int Y_STATUS  = H - 10;
+    // Arrow center: leave SZ(20) + 2 px padding from the corner margin
+    const int ARROW_CX  = W - CORNER_MARGIN - 22;
 
     String clk = clockString();
 
@@ -335,26 +400,27 @@ static void renderDisplay() {
         } else {
             uint16_t col = glucoseColor(g_reading.sgv);
 
+            // ---- Large glucose value (7-segment style, centred) -----
             lcd.setFont(&lgfx::fonts::Font7);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(String(g_reading.sgv), W / 2 - 18, Y_GLUCOSE);
+            lcd.drawString(String(g_reading.sgv), W / 2, Y_GLUCOSE);
 
-            lcd.setFont(&lgfx::fonts::Font4);
-            lcd.setTextColor(col);
-            lcd.setTextDatum(lgfx::middle_right);
-            lcd.drawString(trendArrow(g_reading.direction), W - CORNER_MARGIN, Y_GLUCOSE);
-
+            // ---- Delta – inline left, same Y as glucose -------------
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                               + String(g_reading.delta);
             lcd.setFont(&lgfx::fonts::Font4);
             lcd.setTextColor(lcd.color565(100, 210, 230));
-            lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(deltaStr, W / 2, Y_DELTA);
+            lcd.setTextDatum(lgfx::middle_left);
+            lcd.drawString(deltaStr, CORNER_MARGIN, Y_GLUCOSE);
 
+            // ---- Trend arrow – graphical, inline right ---------------
+            drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
+
+            // ---- Age of reading (Font4, more visible) ----------------
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
-                lcd.setFont(&lgfx::fonts::Font2);
+                lcd.setFont(&lgfx::fonts::Font4);
                 lcd.setTextColor(lcd.color565(210, 210, 210));
                 lcd.setTextDatum(lgfx::middle_center);
                 lcd.drawString(age, W / 2, Y_AGE);
@@ -407,30 +473,27 @@ static void renderDisplay() {
     } else {
         uint16_t col = glucoseColor(g_reading.sgv);
 
-        // ---- Large glucose value (7-segment style) --------------
+        // ---- Large glucose value (7-segment style, centred) -----
         canvas.setFont(&lgfx::fonts::Font7);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(String(g_reading.sgv), W / 2 - 18, Y_GLUCOSE);
+        canvas.drawString(String(g_reading.sgv), W / 2, Y_GLUCOSE);
 
-        // ---- Trend arrow ----------------------------------------
-        canvas.setFont(&lgfx::fonts::Font4);
-        canvas.setTextColor(col);
-        canvas.setTextDatum(lgfx::middle_right);
-        canvas.drawString(trendArrow(g_reading.direction), W - CORNER_MARGIN, Y_GLUCOSE);
-
-        // ---- Delta (no units) -----------------------------------
+        // ---- Delta – inline left, same Y as glucose -------------
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                           + String(g_reading.delta);
         canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(lcd.color565(100, 210, 230));
-        canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(deltaStr, W / 2, Y_DELTA);
+        canvas.setTextDatum(lgfx::middle_left);
+        canvas.drawString(deltaStr, CORNER_MARGIN, Y_GLUCOSE);
 
-        // ---- Age of reading -------------------------------------
+        // ---- Trend arrow – graphical, inline right ---------------
+        drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
+
+        // ---- Age of reading (Font4, more visible) ----------------
         String age = ageLabel(g_reading.dateMs);
         if (age.length() > 0) {
-            canvas.setFont(&lgfx::fonts::Font2);
+            canvas.setFont(&lgfx::fonts::Font4);
             canvas.setTextColor(lcd.color565(210, 210, 210));
             canvas.setTextDatum(lgfx::middle_center);
             canvas.drawString(age, W / 2, Y_AGE);
