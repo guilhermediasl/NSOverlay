@@ -176,7 +176,7 @@ static unsigned long  g_lastFetchMs = 0;
 // Nightscout returns entries newest-first; we store them in the same
 // order so g_graphHistory[0] is always the most-recent reading.
 #if SHOW_GRAPH
-    static const int GRAPH_MAX_POINTS = 50;  // covers 4+ h at 5-min intervals
+    static const int GRAPH_MAX_POINTS = 50;  // buffer size; comfortably holds up to ~4 h at 5-min intervals
     struct GraphPoint { int sgv; int64_t dateMs; };
     static GraphPoint g_graphHistory[GRAPH_MAX_POINTS];
     static int        g_graphHistoryLen = 0;
@@ -582,7 +582,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         // High zone (above TARGET_HIGH): faint orange
         g.fillRect(GRAPH_LEFT, yTop, GRAPH_W, yHigh - yTop, COLOR_GRAPH_HIGH_FILL);
 
-        // Boundary lines — dashed effect: draw solid, visually sufficient at this scale
+        // Boundary lines — solid lines at this pixel scale are visually sufficient
         g.drawFastHLine(GRAPH_LEFT, yHigh, GRAPH_W, COLOR_GRAPH_TARGET_LINE);
         g.drawFastHLine(GRAPH_LEFT, yLow,  GRAPH_W, COLOR_GRAPH_TARGET_LINE);
     }

@@ -36,9 +36,9 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 │                           300       │
 │  ● ● ● ●    ● ● ●                  │  ← coloured scatter dots
 │           ● ●      ● ● ● ● ● ● ●  │     green = in-range
-│  ── ── ── ── ── ── ── ── ── ─ 180 │  ← TARGET_HIGH dashed line
+│  ────────────────────────────── 180 │  ← TARGET_HIGH solid line
 │  [target zone shaded green]         │
-│  ── ── ── ── ── ── ── ── ── ─  70 │  ← TARGET_LOW dashed line
+│  ──────────────────────────────  70 │  ← TARGET_LOW solid line
 │                              40     │
 │       |           |           |     │  ← hour ticks
 │     14:00        15:00      16:00   │
@@ -49,6 +49,7 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 * **Latest reading** is drawn with a larger dot and an outer ring
 * **Stale-data** (≥ 15 min old): age label turns yellow; compact "! OLD" appears on the left
 * Green shaded zone = target range; dim-red zone = below target; dim-orange zone = above target
+* Solid boundary lines mark `TARGET_LOW` and `TARGET_HIGH`
 
 ---
 
