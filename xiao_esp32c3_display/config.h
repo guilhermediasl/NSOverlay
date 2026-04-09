@@ -9,7 +9,11 @@
 
 // ---- WiFi -------------------------------------------------------
 // Your home/office WiFi network credentials.
-#define WIFI_SSID       "YourWiFiSSID"       // <-- change
+// IMPORTANT: The ESP32C3 supports 2.4 GHz WiFi ONLY.
+// If your router broadcasts separate 2.4 GHz and 5 GHz networks
+// (often named "MyNetwork" and "MyNetwork_5G"), you MUST use the
+// 2.4 GHz SSID here — the device will never connect to a 5 GHz network.
+#define WIFI_SSID       "YourWiFiSSID"       // <-- change (2.4 GHz band only)
 #define WIFI_PASSWORD   "YourWiFiPassword"   // <-- change
 
 // ---- Nightscout -------------------------------------------------

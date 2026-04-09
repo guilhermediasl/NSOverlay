@@ -145,7 +145,7 @@ Call `lcd.setRotation(n)` in `setup()` with:
 |---|---|
 | White / blank screen | Check all SPI wires; verify `LCD_OFFSET_Y = 20` in `config.h` |
 | Inverted colours | The ST7789 on the Waveshare 1.69″ requires `invert = true` (already set) |
-| "WiFi ERR" on status bar | Check SSID/password; move closer to the router |
+| "WiFi ERR" on status bar / connection timeout | The ESP32C3 supports **2.4 GHz only** — if your router has a separate 5 GHz network (often named `MySSID_5G`), use the 2.4 GHz SSID instead. Also check password and signal strength. |
 | "NS: ERR" on status bar | Verify `NIGHTSCOUT_URL` (no trailing slash) and `API_SECRET` |
 | Stale data warning | Your CGM transmitter may have stopped sending; check Nightscout |
 | Time is wrong | Set `NTP_GMT_OFFSET_SEC` correctly in `config.h` |
