@@ -177,7 +177,7 @@ class GlucoseWidget(QWidget):
         self.age_label = QLabel("")
         self.age_label.setObjectName("HeaderAge")
         self.age_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.age_label.setFont(QFont("sans-serif", self.config['age_font_size'] - 1, QFont.Weight.Normal))
+        self.age_label.setFont(QFont("sans-serif", self.config['age_font_size'], QFont.Weight.Normal))
         
         self.left_info_layout.addWidget(self.time_label)
         self.left_info_layout.addWidget(self.age_label)
@@ -263,6 +263,7 @@ class GlucoseWidget(QWidget):
         self._last_age_text = None
         self._last_age_color = None
         self._last_glucose_stale_state = None
+        self._last_glucose_plain = ""
         self._last_tray_icon_key = None
         self._last_tray_icon = None
         self._brush_cache = {}
@@ -463,7 +464,7 @@ class GlucoseWidget(QWidget):
         w = self.width()
         glucose_base = max(8, int(self.config.get('glucose_font_size', 18)))
         time_base = max(6, int(self.config.get('time_font_size', 12)))
-        age_base = max(6, int(self.config.get('age_font_size', 10)) - 1)
+        age_base = max(6, int(self.config.get('age_font_size', 10)))
 
         if w < 280:
             glucose_size = max(10, glucose_base - 4)
@@ -1138,7 +1139,7 @@ class GlucoseWidget(QWidget):
         self.user_resized = not self.user_resized
         
         if not self.user_resized and hasattr(self, 'label'):
-            glucose_text = self.label.text()
+            glucose_text = getattr(self, '_last_glucose_plain', '') or self.label.text()
             if glucose_text and glucose_text != "Loading...":
                 self.auto_resize_to_fit_content(glucose_text)
         
@@ -1831,6 +1832,23 @@ class GlucoseWidget(QWidget):
         
         self.move(QPoint(center_x, center_y))
         
+    def _format_glucose_html(self, current, trend_arrow, delta_text):
+        """Format glucose display as rich HTML with the delta vertically centred alongside
+        the glucose value.  Font sizes are expressed as percentages of the label's base
+        font so they scale correctly when *_apply_dynamic_header_fonts* adjusts the base
+        size for compact-mode widgets.
+        """
+        arrow_html = f'<span style="font-size:115%;">{trend_arrow}</span>'
+        if delta_text:
+            delta_stripped = delta_text.strip()
+            delta_html = (
+                f'<span style="font-size:68%;font-weight:normal;vertical-align:middle;">'
+                f' {delta_stripped}</span>'
+            )
+        else:
+            delta_html = ''
+        return f'{current} {arrow_html}{delta_html}'
+
     def auto_resize_to_fit_content(self, glucose_text):
         """Automatically resize window to fit glucose content optimally (only if not manually resized)"""
         if getattr(self, 'user_resized', False):
@@ -2889,7 +2907,8 @@ class GlucoseWidget(QWidget):
             
             trend_arrow = self.convert_nightscout_trend(last_valid_direction)
             glucose_text = f"{current} {trend_arrow}{delta_text}"
-            self.label.setText(glucose_text)
+            self._last_glucose_plain = glucose_text
+            self.label.setText(self._format_glucose_html(current, trend_arrow, delta_text))
             
             self.auto_resize_to_fit_content(glucose_text)
             
@@ -3045,18 +3064,18 @@ class GlucoseWidget(QWidget):
     def convert_nightscout_trend(self, direction):
         """Convert Nightscout trend to appropriate arrow symbol"""
         trend_map = {
-            'DoubleUp': '↑↑',
-            'SingleUp': '↑',
+            'DoubleUp': '⬆⬆',
+            'SingleUp': '⬆',
             'FortyFiveUp': '↗',
-            'Flat': '→',
+            'Flat': '➡',
             'FortyFiveDown': '↘',
-            'SingleDown': '↓',
-            'DoubleDown': '↓↓',
-            'None': '→',
-            'NOT COMPUTABLE': '→',
-            'RATE OUT OF RANGE': '→'
+            'SingleDown': '⬇',
+            'DoubleDown': '⬇⬇',
+            'None': '➡',
+            'NOT COMPUTABLE': '➡',
+            'RATE OUT OF RANGE': '➡'
         }
-        return trend_map.get(direction, '→')
+        return trend_map.get(direction, '➡')
 
     def update_time_display(self):
         """Update current time and entry age without fetching new data"""
