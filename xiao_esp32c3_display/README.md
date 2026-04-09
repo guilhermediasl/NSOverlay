@@ -178,9 +178,11 @@ All `COLOR_*` constants in `config.h` accept:
 | `COLOR_SPLASH_ACCENT` | `RGB565(100, 210, 230)` | Cyan subtitle on the boot splash |
 | `COLOR_SPLASH_DIM` | `RGB565(150, 150, 150)` | Grey status message on the boot splash |
 | `COLOR_GRAPH_TARGET_FILL` | `RGB565(0, 40, 0)` | Dark green fill for the target zone in the graph |
-| `COLOR_GRAPH_TARGET_LINE` | `RGB565(0, 130, 0)` | Bright green boundary lines at `TARGET_LOW` / `TARGET_HIGH` |
+| `COLOR_GRAPH_HIGH_LINE` | `RGB565(255, 150, 0)` | Orange line at `TARGET_HIGH` boundary |
+| `COLOR_GRAPH_LOW_LINE` | `RGB565(220, 60, 60)` | Red line at `TARGET_LOW` boundary |
 | `COLOR_GRAPH_LOW_FILL` | `RGB565(50, 0, 0)` | Dark red fill below the low-target zone in the graph |
 | `COLOR_GRAPH_HIGH_FILL` | `RGB565(50, 25, 0)` | Dark orange fill above the high-target zone in the graph |
+| `COLOR_GRAPH_10MIN_LINE` | `RGB565(30, 30, 30)` | Very dim vertical line every 10 minutes on the graph |
 | `COLOR_GRAPH_AXIS` | `RGB565(90, 90, 90)` | Axis lines and tick marks |
 | `COLOR_GRAPH_AXIS_LABEL` | `RGB565(120, 120, 120)` | X / Y axis text labels |
 | `COLOR_GRAPH_BORDER` | `RGB565(50, 50, 50)` | Graph area border and separator line |

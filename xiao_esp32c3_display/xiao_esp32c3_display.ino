@@ -462,13 +462,13 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     // Header occupies the top HEADER_H pixels.  Everything below is graph.
     //
     // Header structure:
-    //   Left column  [MARGIN … SEP_X-1] : clock (FONT_MEDIUM) + age + WiFi/NS
+    //   Left column  [MARGIN … SEP_X-1] : clock (FONT_LARGE) + age (FONT_SMALL)
     //   Vertical rule at SEP_X
     //   Right column [SEP_X+5 … W-MARGIN]: glucose + slim arrow + (delta) — centred
     const int HEADER_H   = 56;   // total header height
-    const int SEP_X      = 92;   // x of vertical rule
+    const int SEP_X      = 100;  // x of vertical rule (wider left column for FONT_LARGE clock)
     const int MARGIN     = 6;    // horizontal inset from screen edges
-    const int L_X        = MARGIN;
+    const int L_X        = 12;   // left edge of left column text (avoids left-edge clipping)
     const int R_X        = SEP_X + 5;   // left edge of right column
     const int ARROW_SZ   = 11;          // slim arrow; at sz=11, T=1 so shaft is 2 px wide
 
@@ -587,39 +587,28 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         }
     }
 
-    // ── Header: left column — clock / age / WiFi+NS ───────────────
-    // Row 1 (y≈17): Clock in FONT_MEDIUM (larger, more readable)
-    // Row 2 (y≈37): Age of reading (Font0)  —  "! STALE" prefix when old
-    // Row 3 (y≈50): WiFi  NS  status (Font0, coloured)
+    // ── Header: left column — clock + age ────────────────────────
+    // Row 1 (y≈18): Clock in FONT_LARGE (bold, highly readable)
+    // Row 2 (y≈44): Age of reading in FONT_SMALL; stale prefix "! " when ≥ 15 min
     {
         String clk = clockString();
         if (clk.length() > 0) {
-            g.setFont(&FONT_MEDIUM);
+            g.setFont(&FONT_LARGE);
             g.setTextSize(1);
             g.setTextColor(COLOR_CLOCK);
             g.setTextDatum(lgfx::middle_left);
-            g.drawString(clk, L_X, 17);
+            g.drawString(clk, L_X, 18);
         }
     }
     if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
         int64_t ageMin = (nowMs - g_reading.dateMs) / 60000LL;
         bool stale = (ageMin >= 15);
         String age = (stale ? "! " : "") + ageLabel(g_reading.dateMs);
-        g.setFont(&lgfx::fonts::Font0);
+        g.setFont(&FONT_SMALL);
         g.setTextSize(1);
         g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(age, L_X, 37);
-    }
-    {
-        bool wifiOk = (WiFi.status() == WL_CONNECTED);
-        g.setFont(&lgfx::fonts::Font0);
-        g.setTextSize(1);
-        g.setTextDatum(lgfx::middle_left);
-        g.setTextColor(wifiOk ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(wifiOk ? "WiFi" : "WiFi!", L_X, 50);
-        g.setTextColor(g_reading.valid ? COLOR_STATUS_OK : COLOR_STATUS_ERR);
-        g.drawString(g_reading.valid ? " NS" : " NS!", L_X + 26, 50);
+        g.drawString(age, L_X, 44);
     }
 
     // ── Header: vertical rule ──────────────────────────────────────
@@ -649,8 +638,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 #endif  // GRAPH_ZONE_FILLS
 
     // ── Graph: target boundary lines ──────────────────────────────
-    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W, COLOR_GRAPH_TARGET_LINE);
-    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_LOW),  GRAPH_W, COLOR_GRAPH_TARGET_LINE);
+    // High line = orange (approaching high risk), Low line = red (low risk)
+    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W, COLOR_GRAPH_HIGH_LINE);
+    g.drawFastHLine(GRAPH_LEFT, sgvToY(TARGET_LOW),  GRAPH_W, COLOR_GRAPH_LOW_LINE);
 
     // ── Graph: Y-axis labels (TARGET_LOW and TARGET_HIGH only) ─────
     g.setFont(&lgfx::fonts::Font0);
@@ -660,8 +650,17 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     g.drawString(String(TARGET_HIGH), GRAPH_LEFT - 1, sgvToY(TARGET_HIGH));
     g.drawString(String(TARGET_LOW),  GRAPH_LEFT - 1, sgvToY(TARGET_LOW));
 
-    // ── Graph: X-axis hour ticks + labels ─────────────────────────
+    // ── Graph: X-axis 10-minute grid lines + hour ticks + labels ──
     if (g_ntpSynced && nowMs > 0) {
+        // Faint 10-minute vertical lines across the full graph height
+        const int64_t tenMinMs = 600000LL;
+        int64_t firstTenMin = (oldestMs / tenMinMs + 1) * tenMinMs;
+        for (int64_t t = firstTenMin; t <= nowMs; t += tenMinMs) {
+            int x = msToX(t);
+            if (x > GRAPH_LEFT && x < GRAPH_RIGHT) {
+                g.drawFastVLine(x, GRAPH_TOP, GRAPH_H, COLOR_GRAPH_10MIN_LINE);
+            }
+        }
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
@@ -696,13 +695,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         if (py < GRAPH_TOP  || py > GRAPH_BOTTOM) continue;
 
         uint16_t dotColor = glucoseColor(sgv);
-        if (i == 0) {
-            // Latest reading: larger filled dot + outer ring for emphasis
-            g.fillCircle(px, py, 5, dotColor);
-            g.drawCircle(px, py, 7, dotColor);
-        } else {
-            g.fillCircle(px, py, 3, dotColor);
-        }
+        g.fillCircle(px, py, 3, dotColor);
     }
 }
 #endif  // SHOW_GRAPH
