@@ -201,6 +201,16 @@ static String ageLabel(int64_t dateMs) {
     return String(ageMin / 60) + " h atras";
 }
 
+// Current time as "HH:MM" string, or "" when NTP not yet synced.
+static String clockString() {
+    if (!g_ntpSynced) return "";
+    struct tm t;
+    if (!getLocalTime(&t)) return "";
+    char buf[6];
+    strftime(buf, sizeof(buf), "%H:%M", &t);
+    return String(buf);
+}
+
 // =================================================================
 // Nightscout fetch
 // =================================================================
@@ -284,17 +294,40 @@ static void renderDisplay() {
     const int W = lcd.width();
     const int H = lcd.height();
 
+    // Layout constants (all y values leave ≥8 px from top and bottom edges)
+    //   Row 1 – header "GLICEMIA" + clock    y = 10  (Font2, ~16 px)
+    //   Row 2 – large glucose + trend arrow  y = 84  (Font7, ~48 px, centre)
+    //   Row 3 – "mg/dL" unit label           y = 113 (Font2, top)
+    //   Row 4 – delta                        y = 150 (Font4, ~26 px, centre)
+    //   Row 5 – age of reading               y = 183 (Font2, centre)
+    //   Row 6 – stale-data warning (if any)  y = 207 (Font2, centre)
+    //   Row 7 – WiFi / NS status bar         y = H-6 (Font0, bottom datum)
+    const int Y_HEADER  = 10;
+    const int Y_GLUCOSE = 84;
+    const int Y_UNIT    = 113;
+    const int Y_DELTA   = 150;
+    const int Y_AGE     = 183;
+    const int Y_STALE   = 207;
+    const int Y_STATUS  = H - 6;
+
+    String clk = clockString();
+
     // If the off-screen sprite could not be allocated, fall back to
     // rendering directly on the LCD (with some flicker accepted).
     if (canvas.width() == 0) {
         lcd.fillScreen(TFT_BLACK);
 
-        // Header
+        // ---- Header: "GLICEMIA" left, clock right -------------------
         lcd.setFont(&lgfx::fonts::Font2);
         lcd.setTextSize(1);
-        lcd.setTextDatum(lgfx::top_center);
         lcd.setTextColor(lcd.color565(120, 120, 120));
-        lcd.drawString("GLICEMIA", W / 2, 8);
+        lcd.setTextDatum(lgfx::top_left);
+        lcd.drawString("GLICEMIA", 6, Y_HEADER);
+        if (clk.length() > 0) {
+            lcd.setTextDatum(lgfx::top_right);
+            lcd.setTextColor(lcd.color565(180, 180, 180));
+            lcd.drawString(clk, W - 6, Y_HEADER);
+        }
 
         if (!g_reading.valid) {
             lcd.setFont(&lgfx::fonts::Font4);
@@ -308,31 +341,31 @@ static void renderDisplay() {
             lcd.setFont(&lgfx::fonts::Font7);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(String(g_reading.sgv), W / 2 - 18, 105);
+            lcd.drawString(String(g_reading.sgv), W / 2 - 18, Y_GLUCOSE);
 
             lcd.setFont(&lgfx::fonts::Font4);
             lcd.setTextColor(col);
             lcd.setTextDatum(lgfx::middle_right);
-            lcd.drawString(trendArrow(g_reading.direction), W - 6, 105);
+            lcd.drawString(trendArrow(g_reading.direction), W - 6, Y_GLUCOSE);
 
             lcd.setFont(&lgfx::fonts::Font2);
             lcd.setTextColor(lcd.color565(140, 140, 140));
             lcd.setTextDatum(lgfx::top_center);
-            lcd.drawString("mg/dL", W / 2 - 18, 135);
+            lcd.drawString("mg/dL", W / 2 - 18, Y_UNIT);
 
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                               + String(g_reading.delta) + " mg/dL";
             lcd.setFont(&lgfx::fonts::Font4);
             lcd.setTextColor(lcd.color565(100, 210, 230));
             lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(deltaStr, W / 2, 180);
+            lcd.drawString(deltaStr, W / 2, Y_DELTA);
 
             String age = ageLabel(g_reading.dateMs);
             if (age.length() > 0) {
                 lcd.setFont(&lgfx::fonts::Font2);
                 lcd.setTextColor(lcd.color565(120, 120, 120));
                 lcd.setTextDatum(lgfx::middle_center);
-                lcd.drawString(age, W / 2, 215);
+                lcd.drawString(age, W / 2, Y_AGE);
             }
 
             if (g_ntpSynced && g_reading.dateMs > 0) {
@@ -344,7 +377,7 @@ static void renderDisplay() {
                     lcd.setFont(&lgfx::fonts::Font2);
                     lcd.setTextColor(TFT_YELLOW);
                     lcd.setTextDatum(lgfx::middle_center);
-                    lcd.drawString("! DADO ANTIGO !", W / 2, H - 8);
+                    lcd.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
                 }
             }
         }
@@ -354,21 +387,26 @@ static void renderDisplay() {
         lcd.setTextSize(1);
         lcd.setTextDatum(lgfx::bottom_left);
         lcd.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
-        lcd.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, H - 2);
+        lcd.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, Y_STATUS);
         lcd.setTextDatum(lgfx::bottom_right);
         lcd.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
-        lcd.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, H - 2);
+        lcd.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, Y_STATUS);
         return;
     }
 
     canvas.fillSprite(TFT_BLACK);
 
-    // ---- Header -------------------------------------------------
-    canvas.setTextColor(lcd.color565(120, 120, 120));
+    // ---- Header: "GLICEMIA" left, clock right -------------------
     canvas.setFont(&lgfx::fonts::Font2);
     canvas.setTextSize(1);
-    canvas.setTextDatum(lgfx::top_center);
-    canvas.drawString("GLICEMIA", W / 2, 8);
+    canvas.setTextColor(lcd.color565(120, 120, 120));
+    canvas.setTextDatum(lgfx::top_left);
+    canvas.drawString("GLICEMIA", 6, Y_HEADER);
+    if (clk.length() > 0) {
+        canvas.setTextDatum(lgfx::top_right);
+        canvas.setTextColor(lcd.color565(180, 180, 180));
+        canvas.drawString(clk, W - 6, Y_HEADER);
+    }
 
     if (!g_reading.valid) {
         // ---- Error / loading state ------------------------------
@@ -381,23 +419,22 @@ static void renderDisplay() {
         uint16_t col = glucoseColor(g_reading.sgv);
 
         // ---- Large glucose value (7-segment style) --------------
-        canvas.setFont(&lgfx::fonts::Font7);   // 48-px 7-seg font
+        canvas.setFont(&lgfx::fonts::Font7);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_center);
-        // Shift left to leave room for the trend arrow
-        canvas.drawString(String(g_reading.sgv), W / 2 - 18, 105);
+        canvas.drawString(String(g_reading.sgv), W / 2 - 18, Y_GLUCOSE);
 
         // ---- Trend arrow ----------------------------------------
-        canvas.setFont(&lgfx::fonts::Font4);   // 26-px
+        canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_right);
-        canvas.drawString(trendArrow(g_reading.direction), W - 6, 105);
+        canvas.drawString(trendArrow(g_reading.direction), W - 6, Y_GLUCOSE);
 
         // ---- Units label ----------------------------------------
         canvas.setFont(&lgfx::fonts::Font2);
         canvas.setTextColor(lcd.color565(140, 140, 140));
         canvas.setTextDatum(lgfx::top_center);
-        canvas.drawString("mg/dL", W / 2 - 18, 135);
+        canvas.drawString("mg/dL", W / 2 - 18, Y_UNIT);
 
         // ---- Delta ----------------------------------------------
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
@@ -405,7 +442,7 @@ static void renderDisplay() {
         canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(lcd.color565(100, 210, 230));
         canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(deltaStr, W / 2, 180);
+        canvas.drawString(deltaStr, W / 2, Y_DELTA);
 
         // ---- Age of reading -------------------------------------
         String age = ageLabel(g_reading.dateMs);
@@ -413,7 +450,7 @@ static void renderDisplay() {
             canvas.setFont(&lgfx::fonts::Font2);
             canvas.setTextColor(lcd.color565(120, 120, 120));
             canvas.setTextDatum(lgfx::middle_center);
-            canvas.drawString(age, W / 2, 215);
+            canvas.drawString(age, W / 2, Y_AGE);
         }
 
         // ---- Stale-data warning (reading older than 15 min) -----
@@ -426,7 +463,7 @@ static void renderDisplay() {
                 canvas.setFont(&lgfx::fonts::Font2);
                 canvas.setTextColor(TFT_YELLOW);
                 canvas.setTextDatum(lgfx::middle_center);
-                canvas.drawString("! DADO ANTIGO !", W / 2, H - 8);
+                canvas.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
             }
         }
     }
@@ -438,11 +475,11 @@ static void renderDisplay() {
 
     canvas.setTextDatum(lgfx::bottom_left);
     canvas.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
-    canvas.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, H - 2);
+    canvas.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, Y_STATUS);
 
     canvas.setTextDatum(lgfx::bottom_right);
     canvas.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
-    canvas.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, H - 2);
+    canvas.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, Y_STATUS);
 
     canvas.pushSprite(0, 0);
 }
