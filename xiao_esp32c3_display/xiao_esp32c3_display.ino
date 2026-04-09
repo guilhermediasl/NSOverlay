@@ -343,6 +343,38 @@ static uint16_t glucoseColor(int sgv) {
     return                                    COLOR_GLUCOSE_OK;
 }
 
+// Linear interpolation between two RGB-565 colours.
+// factor / maxFactor in [0,1]: 0 → c0, maxFactor → c1.
+static uint16_t lerpColor565(uint16_t c0, uint16_t c1, int factor, int maxFactor) {
+    if (maxFactor <= 0 || factor >= maxFactor) return c1;
+    if (factor <= 0) return c0;
+    int r0 = (c0 >> 11) & 0x1F,  g0 = (c0 >> 5) & 0x3F,  b0 = c0 & 0x1F;
+    int r1 = (c1 >> 11) & 0x1F,  g1 = (c1 >> 5) & 0x3F,  b1 = c1 & 0x1F;
+    int r = r0 + (r1 - r0) * factor / maxFactor;
+    int g = g0 + (g1 - g0) * factor / maxFactor;
+    int b = b0 + (b1 - b0) * factor / maxFactor;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+// Graph-dot colour matching the Python NSOverlay gradient:
+//   in-range                → COLOR_GLUCOSE_OK (green)
+//   just above TARGET_HIGH  → yellow, at sgvMax → red
+//   just below TARGET_LOW   → yellow, at sgvMin → red
+// sgvMin / sgvMax are the actual extremes visible in the dataset window.
+static uint16_t glucoseColorGraph(int sgv, int sgvMin, int sgvMax) {
+    const uint16_t YELLOW = RGB565(255, 255, 0);
+    const uint16_t RED    = RGB565(255,   0, 0);
+    if (sgv > TARGET_HIGH) {
+        int fullRange = max(sgvMax - TARGET_HIGH, 1);
+        return lerpColor565(YELLOW, RED, sgv - TARGET_HIGH, fullRange);
+    }
+    if (sgv > 0 && sgv < TARGET_LOW) {
+        int fullRange = max(TARGET_LOW - sgvMin, 1);
+        return lerpColor565(YELLOW, RED, TARGET_LOW - sgv, fullRange);
+    }
+    return COLOR_GLUCOSE_OK;
+}
+
 static bool glucoseNeedsPill(int sgv) {
     return (sgv > 0 && (sgv < TARGET_LOW || sgv > TARGET_HIGH));
 }
@@ -856,7 +888,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         if (px < GRAPH_LEFT || px > GRAPH_RIGHT) continue;
         if (py < GRAPH_TOP  || py > GRAPH_BOTTOM) continue;
 
-        uint16_t dotColor = glucoseColor(sgv);
+        uint16_t dotColor = glucoseColorGraph(sgv, dataMin, dataMax);
         g.fillCircle(px, py, 3, dotColor);
     }
 }
