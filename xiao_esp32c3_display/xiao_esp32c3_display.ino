@@ -347,7 +347,7 @@ static bool fetchNightscout() {
         // (one reading every 5 min, plus a small buffer).
         // In simple mode only 2 readings are needed (current + previous delta).
 #if SHOW_GRAPH
-        const int fetchCount = min(GRAPH_MAX_POINTS, (GRAPH_MINUTES / 5) + 4);
+        const int fetchCount = min(GRAPH_MAX_POINTS, (GRAPH_MINUTES / 5) + 4);  // +4 buffer for readings arriving during fetch / minor clock drift
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=" + String(fetchCount);
 #else
         String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
@@ -381,7 +381,7 @@ static bool fetchNightscout() {
         // Use DynamicJsonDocument (heap) to avoid overflowing the 8 KB task stack.
         // In simple mode 2 KB on the stack is fine.
 #if SHOW_GRAPH
-        DynamicJsonDocument doc(12288);
+        DynamicJsonDocument doc(12288);  // 12 KB heap: fits ~36+ entries (~10 KB JSON) with overhead
 #else
         StaticJsonDocument<2048> doc;
 #endif
@@ -544,16 +544,18 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         uint16_t col = glucoseColor(g_reading.sgv);
 
         // Large glucose number — left-aligned from R_X, vertically centred
-        // at y = HEADER_H/2.  Typical "XXX" width at FONT_LARGE ≈ 45 px.
+        // at y = HEADER_H/2.
         g.setFont(&FONT_LARGE);
         g.setTextSize(1);
         g.setTextColor(col);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(String(g_reading.sgv), R_X, HEADER_H / 2 - 4);
+        String glucoseStr = String(g_reading.sgv);
+        g.drawString(glucoseStr, R_X, HEADER_H / 2 - 4);
 
-        // Trend arrow — to the right of the glucose number
-        // FONT_LARGE char width ~14 px/pt → "XXX" ≈ 48 px → arrow starts at R_X+52
-        int arrowCX = R_X + 52;
+        // Trend arrow — positioned right of the glucose text using the
+        // measured pixel width so 2-digit and 3-digit values both look right.
+        int glucoseW = g.textWidth(glucoseStr);
+        int arrowCX  = R_X + glucoseW + 8;
         drawTrendArrow(g, g_reading.direction, arrowCX, HEADER_H / 2 - 4, col, 14);
 
         // Delta — right of arrow
