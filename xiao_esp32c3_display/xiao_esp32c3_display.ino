@@ -377,6 +377,7 @@ static void showSplash(const String& msg) {
 // =================================================================
 static void connectWiFi() {
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true);  // reset any in-progress connection attempt
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     showSplash("Conectando WiFi...");
