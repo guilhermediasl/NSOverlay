@@ -294,21 +294,23 @@ static void renderDisplay() {
     const int W = lcd.width();
     const int H = lcd.height();
 
-    // Layout constants (all y values leave ≥8 px from top and bottom edges)
-    //   Row 1 – header "GLICEMIA" + clock    y = 10  (Font2, ~16 px)
+    // Layout constants – all corner elements use CORNER_MARGIN from each edge
+    // so that rounded-corner clipping on the physical display does not cut text.
+    //   Row 1 – header "GLICEMIA" + clock    y = 14  (Font2, ~16 px)
     //   Row 2 – large glucose + trend arrow  y = 84  (Font7, ~48 px, centre)
     //   Row 3 – "mg/dL" unit label           y = 113 (Font2, top)
     //   Row 4 – delta                        y = 150 (Font4, ~26 px, centre)
     //   Row 5 – age of reading               y = 183 (Font2, centre)
     //   Row 6 – stale-data warning (if any)  y = 207 (Font2, centre)
-    //   Row 7 – WiFi / NS status bar         y = H-6 (Font0, bottom datum)
-    const int Y_HEADER  = 10;
+    //   Row 7 – WiFi / NS status bar         y = H-10 (Font0, bottom datum)
+    const int CORNER_MARGIN = 16;  // horizontal inset from left/right edges
+    const int Y_HEADER  = 14;
     const int Y_GLUCOSE = 84;
     const int Y_UNIT    = 113;
     const int Y_DELTA   = 150;
     const int Y_AGE     = 183;
     const int Y_STALE   = 207;
-    const int Y_STATUS  = H - 6;
+    const int Y_STATUS  = H - 10;
 
     String clk = clockString();
 
@@ -322,11 +324,11 @@ static void renderDisplay() {
         lcd.setTextSize(1);
         lcd.setTextColor(lcd.color565(120, 120, 120));
         lcd.setTextDatum(lgfx::top_left);
-        lcd.drawString("GLICEMIA", 6, Y_HEADER);
+        lcd.drawString("GLICEMIA", CORNER_MARGIN, Y_HEADER);
         if (clk.length() > 0) {
             lcd.setTextDatum(lgfx::top_right);
             lcd.setTextColor(lcd.color565(180, 180, 180));
-            lcd.drawString(clk, W - 6, Y_HEADER);
+            lcd.drawString(clk, W - CORNER_MARGIN, Y_HEADER);
         }
 
         if (!g_reading.valid) {
@@ -387,10 +389,10 @@ static void renderDisplay() {
         lcd.setTextSize(1);
         lcd.setTextDatum(lgfx::bottom_left);
         lcd.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
-        lcd.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, Y_STATUS);
+        lcd.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", CORNER_MARGIN, Y_STATUS);
         lcd.setTextDatum(lgfx::bottom_right);
         lcd.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
-        lcd.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, Y_STATUS);
+        lcd.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - CORNER_MARGIN, Y_STATUS);
         return;
     }
 
@@ -401,11 +403,11 @@ static void renderDisplay() {
     canvas.setTextSize(1);
     canvas.setTextColor(lcd.color565(120, 120, 120));
     canvas.setTextDatum(lgfx::top_left);
-    canvas.drawString("GLICEMIA", 6, Y_HEADER);
+    canvas.drawString("GLICEMIA", CORNER_MARGIN, Y_HEADER);
     if (clk.length() > 0) {
         canvas.setTextDatum(lgfx::top_right);
         canvas.setTextColor(lcd.color565(180, 180, 180));
-        canvas.drawString(clk, W - 6, Y_HEADER);
+        canvas.drawString(clk, W - CORNER_MARGIN, Y_HEADER);
     }
 
     if (!g_reading.valid) {
@@ -475,11 +477,11 @@ static void renderDisplay() {
 
     canvas.setTextDatum(lgfx::bottom_left);
     canvas.setTextColor(wifiOk ? TFT_GREEN : TFT_RED);
-    canvas.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", 4, Y_STATUS);
+    canvas.drawString(wifiOk ? "WiFi OK" : "WiFi ERR", CORNER_MARGIN, Y_STATUS);
 
     canvas.setTextDatum(lgfx::bottom_right);
     canvas.setTextColor(g_reading.valid ? TFT_GREEN : TFT_RED);
-    canvas.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - 4, Y_STATUS);
+    canvas.drawString(g_reading.valid ? "NS: OK" : "NS: ERR", W - CORNER_MARGIN, Y_STATUS);
 
     canvas.pushSprite(0, 0);
 }
