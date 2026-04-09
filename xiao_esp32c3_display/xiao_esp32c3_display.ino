@@ -343,6 +343,16 @@ static uint16_t glucoseColor(int sgv) {
     return                                    COLOR_GLUCOSE_OK;
 }
 
+static bool glucoseNeedsPill(int sgv) {
+    return (sgv > 0 && (sgv < TARGET_LOW || sgv > TARGET_HIGH));
+}
+
+static uint16_t glucosePillColor(int sgv) {
+    if (sgv < TARGET_LOW)  return COLOR_GLUCOSE_LOW;
+    if (sgv > TARGET_HIGH) return COLOR_GLUCOSE_HIGH;
+    return COLOR_BACKGROUND;
+}
+
 // Human-readable age of the last reading (in Portuguese).
 static String ageLabel(int64_t dateMs) {
     if (!g_ntpSynced || dateMs == 0) return "";
@@ -666,6 +676,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                          R_X + rightColW / 2, hCY);
         } else {
             uint16_t col = glucoseColor(g_reading.sgv);
+            bool pill = glucoseNeedsPill(g_reading.sgv);
+            const int rowPadX = 10;
+            const int rowPadY = 6;
 
             // Measure element widths so we can center the whole group.
             g.setFont(&FONT_LARGE);
@@ -679,19 +692,30 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             int totalW   = glucoseW + 4 + ARROW_SZ * 2 + 4 + deltaW;
             int startX   = R_X + max(0, (rightColW - totalW) / 2);
 
+            if (pill) {
+                int textH = g.fontHeight();
+                int groupH = max(textH, ARROW_SZ * 2);
+                int pillX = startX - rowPadX;
+                int pillY = hCY - groupH / 2 - rowPadY;
+                int pillW = totalW + rowPadX * 2;
+                int pillH = groupH + rowPadY * 2;
+                g.fillRoundRect(pillX, pillY, pillW, pillH, 10, glucosePillColor(g_reading.sgv));
+            }
+
             // Glucose number
-            g.setTextColor(col);
+            g.setTextColor(pill ? TFT_WHITE : col);
             g.setTextDatum(lgfx::middle_left);
             g.drawString(glucoseStr, startX, hCY);
 
             // Trend arrow — centre placed so left edge is 4 px right of glucose
             int arrowCX = startX + glucoseW + 4 + ARROW_SZ;
-            drawTrendArrow(g, g_reading.direction, arrowCX, hCY, col, ARROW_SZ);
+            drawTrendArrow(g, g_reading.direction, arrowCX, hCY,
+                           pill ? TFT_WHITE : col, ARROW_SZ);
 
             // Delta (signed), same FONT_LARGE as glucose
             g.setFont(&FONT_LARGE);
             g.setTextSize(1);
-            g.setTextColor(col);
+            g.setTextColor(pill ? TFT_WHITE : col);
             g.setTextDatum(lgfx::middle_left);
             g.drawString(deltaStr, arrowCX + ARROW_SZ + 4, hCY);
         }
@@ -908,21 +932,35 @@ static void renderDisplay() {
             lcd.drawString(msg, W / 2, H / 2);
         } else {
             uint16_t col = glucoseColor(g_reading.sgv);
+            bool pill = glucoseNeedsPill(g_reading.sgv);
+            uint16_t fgCol = pill ? TFT_WHITE : col;
 
             // ---- Large glucose value (Font7, shifted left) ----------
             lcd.setFont(&lgfx::fonts::Font7);
-            lcd.setTextColor(col);
-            lcd.setTextDatum(lgfx::middle_center);
-            lcd.drawString(String(g_reading.sgv), GLUCOSE_X, Y_GLUCOSE);
-
-            // ---- Trend arrow – graphical, centre of row -------------
-            drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
-
-            // ---- Delta – right of arrow, Font7 (same size as glucose) --
+            String glucoseStr = String(g_reading.sgv);
             String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                               + String(g_reading.delta);
+            int glucoseW = lcd.textWidth(glucoseStr);
+            int deltaW = lcd.textWidth(deltaStr);
+            int groupLeft = min(GLUCOSE_X - glucoseW / 2, ARROW_CX - 24);
+            int groupRight = max(max(GLUCOSE_X + glucoseW / 2, ARROW_CX + 24), DELTA_X + deltaW);
+            if (pill) {
+                int textH = lcd.fontHeight();
+                int groupH = max(textH, 48);
+                lcd.fillRoundRect(groupLeft - 12, Y_GLUCOSE - groupH / 2 - 6,
+                                  (groupRight - groupLeft) + 30, groupH + 12,
+                                  10, glucosePillColor(g_reading.sgv));
+            }
+            lcd.setTextColor(fgCol);
+            lcd.setTextDatum(lgfx::middle_center);
+            lcd.drawString(glucoseStr, GLUCOSE_X, Y_GLUCOSE);
+
+            // ---- Trend arrow – graphical, centre of row -------------
+            drawTrendArrow(lcd, g_reading.direction, ARROW_CX, Y_GLUCOSE, fgCol);
+
+            // ---- Delta – right of arrow, Font7 (same size as glucose) --
             lcd.setFont(&lgfx::fonts::Font7);
-            lcd.setTextColor(col);
+            lcd.setTextColor(fgCol);
             lcd.setTextDatum(lgfx::middle_left);
             lcd.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
@@ -988,21 +1026,35 @@ static void renderDisplay() {
         canvas.drawString(msg, W / 2, H / 2);
     } else {
         uint16_t col = glucoseColor(g_reading.sgv);
+        bool pill = glucoseNeedsPill(g_reading.sgv);
+        uint16_t fgCol = pill ? TFT_WHITE : col;
 
         // ---- Large glucose value (Font7, shifted left) ----------
         canvas.setFont(&lgfx::fonts::Font7);
-        canvas.setTextColor(col);
-        canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(String(g_reading.sgv), GLUCOSE_X, Y_GLUCOSE);
-
-        // ---- Trend arrow – graphical, centre of row -------------
-        drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, col);
-
-        // ---- Delta – right of arrow, Font7 (same size as glucose) --
+        String glucoseStr = String(g_reading.sgv);
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
                           + String(g_reading.delta);
+        int glucoseW = canvas.textWidth(glucoseStr);
+        int deltaW = canvas.textWidth(deltaStr);
+        int groupLeft = min(GLUCOSE_X - glucoseW / 2, ARROW_CX - 24);
+        int groupRight = max(max(GLUCOSE_X + glucoseW / 2, ARROW_CX + 24), DELTA_X + deltaW);
+        if (pill) {
+            int textH = canvas.fontHeight();
+            int groupH = max(textH, 48);
+            canvas.fillRoundRect(groupLeft - 12, Y_GLUCOSE - groupH / 2 - 6,
+                                 (groupRight - groupLeft) + 30, groupH + 12,
+                                 10, glucosePillColor(g_reading.sgv));
+        }
+        canvas.setTextColor(fgCol);
+        canvas.setTextDatum(lgfx::middle_center);
+        canvas.drawString(glucoseStr, GLUCOSE_X, Y_GLUCOSE);
+
+        // ---- Trend arrow – graphical, centre of row -------------
+        drawTrendArrow(canvas, g_reading.direction, ARROW_CX, Y_GLUCOSE, fgCol);
+
+        // ---- Delta – right of arrow, Font7 (same size as glucose) --
         canvas.setFont(&lgfx::fonts::Font7);
-        canvas.setTextColor(col);
+        canvas.setTextColor(fgCol);
         canvas.setTextDatum(lgfx::middle_left);
         canvas.drawString(deltaStr, DELTA_X, Y_GLUCOSE);
 
