@@ -169,8 +169,8 @@
 // Graph colours (only relevant when SHOW_GRAPH = 1)
 #define COLOR_GRAPH_TARGET_FILL  RGB565(  0,  40,   0)   // dark green fill between target lines
 #define COLOR_GRAPH_TARGET_LINE  RGB565(  0, 130,   0)   // brighter green boundary lines (unused — see HIGH/LOW below)
-#define COLOR_GRAPH_HIGH_LINE    RGB565(255, 150,   0)   // orange  – high target boundary line
-#define COLOR_GRAPH_LOW_LINE     RGB565(220,  60,  60)   // red     – low  target boundary line
+#define COLOR_GRAPH_HIGH_LINE    RGB565(255, 190,  40)   // bright orange – high target boundary line
+#define COLOR_GRAPH_LOW_LINE     RGB565(255,  90,  90)   // bright red    – low  target boundary line
 #define COLOR_GRAPH_LOW_FILL     RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
 #define COLOR_GRAPH_HIGH_FILL    RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
 #define COLOR_GRAPH_10MIN_LINE   RGB565( 30,  30,  30)   // very dim grey – 10-minute vertical grid lines

@@ -617,7 +617,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     //   Left column  [MARGIN … SEP_X-1] : clock (FONT_LARGE) + age (FONT_SMALL)
     //   Vertical rule at SEP_X
     //   Right column [SEP_X+5 … W-MARGIN]: glucose + slim arrow + (delta) — centred
-    const int HEADER_H   = 56;   // total header height
+    const int HEADER_H   = 68;   // total header height (clock + age rows need ~68 px)
     const int SEP_X      = 100;  // x of vertical rule (wider left column for FONT_LARGE clock)
     const int MARGIN     = 6;    // horizontal inset from screen edges
     const int L_X        = 16;   // left edge of left column text (extra inset avoids corner clipping)
@@ -757,7 +757,8 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     // Row 1 (y≈26): Clock in FONT_LARGE (bold, highly readable)
     // y=26 with middle_left places the text top at ~8 px, clearing the
     // display's rounded-corner clip zone (was y=18 → top at ~0 → cutout).
-    // Row 2 (y≈44): Age of reading in FONT_SMALL; stale prefix "! " when ≥ 15 min
+    // Row 2 (y≈56): Age of reading in FONT_SMALL; stale prefix "! " when ≥ 15 min
+    // (y=56 ensures no overlap with the ~36 px tall FONT_LARGE clock above it).
     {
         String clk = clockString();
         if (clk.length() > 0) {
@@ -776,7 +777,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         g.setTextSize(1);
         g.setTextColor(stale ? COLOR_AGE_STALE : COLOR_AGE_NORMAL);
         g.setTextDatum(lgfx::middle_left);
-        g.drawString(age, L_X, 44);
+        g.drawString(age, L_X, 56);
     }
 
     // ── Header: vertical rule ──────────────────────────────────────
