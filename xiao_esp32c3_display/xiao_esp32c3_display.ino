@@ -105,6 +105,22 @@
 #define GRAPH_TARGET_GAP_LEN 8
 #endif
 
+#ifndef COLOR_GRAPH_NOW_LINE
+#define COLOR_GRAPH_NOW_LINE RGB565(140, 140, 140)
+#endif
+
+#ifndef SHOW_LABELS
+#ifdef GRAPH_SHOW_LABELS
+#define SHOW_LABELS GRAPH_SHOW_LABELS
+#else
+#define SHOW_LABELS 1
+#endif
+#endif
+
+#ifndef SHOW_LINE
+#define SHOW_LINE 1
+#endif
+
 // ---- Font size variants (resolved from DISPLAY_FONT in config.h) -
 #if   DISPLAY_FONT == FONT_FAMILY_FREE_SANS_BOLD
 #  define FONT_LARGE   lgfx::fonts::FreeSansBold18pt7b
@@ -246,20 +262,14 @@ static String sha1Hex(const String& input) {
     return String(hex);
 }
 
-// Map Nightscout direction strings to readable ASCII arrows.
-// Draw a real graphical trend arrow centred on (cx, cy).
-// Works on any LovyanGFX drawable (LGFX_Device or LGFX_Sprite).
-// sz controls the half-size of the arrow bounding box; defaults to 24
-// (the size used in the main glucose row) but can be reduced to 14 for
-// compact header use in graph mode.
+// Draw a graphical trend arrow centred on (cx, cy).
 static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
                            int cx, int cy, uint16_t col, int sz = 24) {
-    const int HW = sz * 11 / 24;  // arrowhead half-width (perpendicular to direction)
-    const int T  = max(1, sz / 6); // shaft half-thickness
-    const int hw = sz *  8 / 24;   // diagonal arrowhead half-width (~HW * 0.7)
+    const int HW = sz * 11 / 24;
+    const int T  = max(1, sz / 6);
+    const int hw = sz *  8 / 24;
 
     if (dir == "DoubleUp") {
-        // Two stacked arrowheads pointing up + short shaft below
         g.fillRect(cx - T, cy, T * 2, sz / 2, col);
         g.fillTriangle(cx - HW, cy,           cx, cy - sz * 2 / 3,
                        cx + HW, cy,           col);
@@ -269,35 +279,28 @@ static void drawTrendArrow(lgfx::LGFXBase& g, const String& dir,
         g.fillRect(cx - T, cy, T * 2, sz, col);
         g.fillTriangle(cx - HW, cy, cx, cy - sz, cx + HW, cy, col);
     } else if (dir == "FortyFiveUp") {
-        // Diagonal arrow pointing upper-right
-        // Shaft parallelogram (perpendicular to direction (1,-1) is (1,1))
         g.fillTriangle(cx - sz + T, cy + sz + T,
                        cx - sz - T, cy + sz - T,
                        cx - T,      cy - T,      col);
         g.fillTriangle(cx - sz + T, cy + sz + T,
                        cx + T,      cy + T,
                        cx - T,      cy - T,      col);
-        // Arrowhead pointing to upper-right
         g.fillTriangle(cx + sz, cy - sz, cx + hw, cy + hw, cx - hw, cy - hw, col);
     } else if (dir == "Flat") {
         g.fillRect(cx - sz, cy - T, sz, T * 2, col);
         g.fillTriangle(cx, cy - HW, cx + sz, cy, cx, cy + HW, col);
     } else if (dir == "FortyFiveDown") {
-        // Diagonal arrow pointing lower-right
-        // Shaft parallelogram (perpendicular to direction (1,1) is (1,-1))
         g.fillTriangle(cx - sz + T, cy - sz - T,
                        cx - sz - T, cy - sz + T,
                        cx - T,      cy + T,      col);
         g.fillTriangle(cx - sz + T, cy - sz - T,
                        cx + T,      cy - T,
                        cx - T,      cy + T,      col);
-        // Arrowhead pointing to lower-right
         g.fillTriangle(cx + sz, cy + sz, cx + hw, cy - hw, cx - hw, cy + hw, col);
     } else if (dir == "SingleDown") {
         g.fillRect(cx - T, cy - sz, T * 2, sz, col);
         g.fillTriangle(cx - HW, cy, cx, cy + sz, cx + HW, cy, col);
     } else if (dir == "DoubleDown") {
-        // Two stacked arrowheads pointing down + short shaft above
         g.fillRect(cx - T, cy - sz / 2, T * 2, sz / 2, col);
         g.fillTriangle(cx - HW, cy,           cx, cy + sz * 2 / 3,
                        cx + HW, cy,           col);
@@ -611,12 +614,6 @@ static bool fetchNightscout() {
 static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 
     // ── Layout constants ───────────────────────────────────────────
-    // Header occupies the top HEADER_H pixels.  Everything below is graph.
-    //
-    // Header structure:
-    //   Left column  [MARGIN … SEP_X-1] : clock (FONT_LARGE) + age (FONT_SMALL)
-    //   Vertical rule at SEP_X
-    //   Right column [SEP_X+5 … W-MARGIN]: glucose + slim arrow + (delta) — centred
     const int HEADER_H   = 68;   // total header height (clock + age rows need ~68 px)
     const int SEP_X      = 100;  // x of vertical rule (wider left column for FONT_LARGE clock)
     const int MARGIN     = 6;    // horizontal inset from screen edges
@@ -624,17 +621,14 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     const int R_X        = SEP_X + 5;   // left edge of right column
     const int ARROW_SZ   = 11;          // slim arrow; at sz=11, T=1 so shaft is 2 px wide
 
-    // Graph area (below header separator)
+    const bool GRAPH_SHOW_LABELS_ENABLED = (SHOW_LABELS != 0);
     const int GRAPH_TOP    = HEADER_H + 3;
-    const int GRAPH_BOTTOM = H - 13;          // 13 px for X-axis labels
-    const int GRAPH_LEFT   = 24;              // left margin for Y-axis labels
+    const int GRAPH_BOTTOM = GRAPH_SHOW_LABELS_ENABLED ? (H - 13) : (H - 2);
+    const int GRAPH_LEFT   = GRAPH_SHOW_LABELS_ENABLED ? 24 : 2;
     const int GRAPH_RIGHT  = W - 2;
     const int GRAPH_H      = GRAPH_BOTTOM - GRAPH_TOP;
     const int GRAPH_W      = GRAPH_RIGHT - GRAPH_LEFT;
 
-    // ── Dynamic Y-axis range (mirrors NSOverlay _compute_y_range) ──
-    // Anchor: TARGET_LOW and TARGET_HIGH must always be visible.
-    // Include all historical readings so any out-of-range value scrolls in.
     int dataMin = TARGET_HIGH;
     int dataMax = TARGET_LOW;
     for (int i = 0; i < g_graphHistoryLen; i++) {
@@ -644,11 +638,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             if (sv > dataMax) dataMax = sv;
         }
     }
-    // Expand to always include the target boundaries
     if (TARGET_LOW  < dataMin) dataMin = TARGET_LOW;
     if (TARGET_HIGH > dataMax) dataMax = TARGET_HIGH;
 
-    // 15 % padding (minimum 20 units) so values don't sit on the edge
     int glucRange = dataMax - dataMin;
     int pad       = glucRange * 15 / 100;
     if (pad < 20) pad = 20;
@@ -656,11 +648,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     int yAxisMin = dataMin - pad;
     int yAxisMax = dataMax + pad;
 
-    // Clamp to physiological limits
     if (yAxisMin < 40)  yAxisMin = 40;
     if (yAxisMax > 400) yAxisMax = 400;
 
-    // Ensure at least a 100-unit window so the graph is never too zoomed in
     if (yAxisMax - yAxisMin < 100) {
         int center = (yAxisMin + yAxisMax) / 2;
         yAxisMin = center - 50;
@@ -669,34 +659,29 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         if (yAxisMax > 400) { yAxisMax = 400; yAxisMin = 300; }
     }
 
-    // Y mapping: glucose value → pixel row (clamped to axis range)
     auto sgvToY = [&](int sgv) -> int {
         if (sgv < yAxisMin) sgv = yAxisMin;
         if (sgv > yAxisMax) sgv = yAxisMax;
         return GRAPH_TOP + (yAxisMax - sgv) * GRAPH_H / (yAxisMax - yAxisMin);
     };
 
-    // Current time & X mapping
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     int64_t nowMs    = g_ntpSynced
                        ? ((int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL)
                        : 0;
     int64_t windowMs = (int64_t)GRAPH_MINUTES * 60000LL;
+    const int64_t graphRightPaddingMs = 5LL * 60LL * 1000LL;
+    int64_t xSpanMs = windowMs + graphRightPaddingMs;
     int64_t oldestMs = nowMs - windowMs;
 
     auto msToX = [&](int64_t ms) -> int {
-        if (windowMs <= 0) return GRAPH_LEFT;
-        return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / windowMs);
+        if (xSpanMs <= 0) return GRAPH_LEFT;
+        return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / xSpanMs);
     };
 
-    // ── Header: right column — glucose + arrow + (delta) ──────────
-    // The entire group is centred horizontally inside the right column.
-    // Arrow centre is placed at startX + glucoseW + ARROW_SZ + 4 so its
-    // left edge (arrowCX - ARROW_SZ) always lands 4 px to the right of
-    // the glucose text, preventing overlap for all arrow types.
     {
-        const int hCY      = HEADER_H / 2;  // vertical centre of header = 28
+        const int hCY      = HEADER_H / 2;
         const int rightColW = (W - MARGIN) - R_X;
 
         if (!g_reading.valid) {
@@ -712,7 +697,6 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             const int rowPadX = 10;
             const int rowPadY = 6;
 
-            // Measure element widths so we can center the whole group.
             g.setFont(&FONT_LARGE);
             g.setTextSize(1);
             String glucoseStr = String(g_reading.sgv);
@@ -720,7 +704,6 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                                 String(g_reading.delta);
             int glucoseW = g.textWidth(glucoseStr);
             int deltaW   = g.textWidth(deltaStr);
-            // Group: glucose | 4px gap | arrow (2*ARROW_SZ) | 4px gap | delta
             int totalW   = glucoseW + 4 + ARROW_SZ * 2 + 4 + deltaW;
             int startX   = R_X + max(0, (rightColW - totalW) / 2);
 
@@ -734,17 +717,14 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                 g.fillRoundRect(pillX, pillY, pillW, pillH, 10, glucosePillColor(g_reading.sgv));
             }
 
-            // Glucose number
             g.setTextColor(pill ? TFT_WHITE : col);
             g.setTextDatum(lgfx::middle_left);
             g.drawString(glucoseStr, startX, hCY);
 
-            // Trend arrow — centre placed so left edge is 4 px right of glucose
             int arrowCX = startX + glucoseW + 4 + ARROW_SZ;
             drawTrendArrow(g, g_reading.direction, arrowCX, hCY,
                            pill ? TFT_WHITE : col, ARROW_SZ);
 
-            // Delta (signed), same FONT_LARGE as glucose
             g.setFont(&FONT_LARGE);
             g.setTextSize(1);
             g.setTextColor(pill ? TFT_WHITE : col);
@@ -753,12 +733,6 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         }
     }
 
-    // ── Header: left column — clock + age ────────────────────────
-    // Row 1 (y≈26): Clock in FONT_LARGE (bold, highly readable)
-    // y=26 with middle_left places the text top at ~8 px, clearing the
-    // display's rounded-corner clip zone (was y=18 → top at ~0 → cutout).
-    // Row 2 (y≈56): Age of reading in FONT_SMALL; stale prefix "! " when ≥ 15 min
-    // (y=56 ensures no overlap with the ~36 px tall FONT_LARGE clock above it).
     {
         String clk = clockString();
         if (clk.length() > 0) {
@@ -780,40 +754,25 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         g.drawString(age, L_X, 56);
     }
 
-    // ── Header: vertical rule ──────────────────────────────────────
     g.drawFastVLine(SEP_X, 4, HEADER_H - 8, COLOR_GRAPH_BORDER);
 
-    // ── Header: horizontal separator ──────────────────────────────
-    g.drawFastHLine(0, HEADER_H, W, COLOR_GRAPH_BORDER);
-
-    // ── Graph: optional coloured zone fills ────────────────────────
-    // Disable by setting GRAPH_ZONE_FILLS 0 in config.h.
 #if GRAPH_ZONE_FILLS
     {
         int yHigh = sgvToY(TARGET_HIGH);
         int yLow  = sgvToY(TARGET_LOW);
 
-        // Low zone (below TARGET_LOW): only if TARGET_LOW is above the axis minimum
         if (TARGET_LOW > yAxisMin) {
             g.fillRect(GRAPH_LEFT, yLow, GRAPH_W, GRAPH_BOTTOM - yLow, COLOR_GRAPH_LOW_FILL);
         }
-        // Target zone
         g.fillRect(GRAPH_LEFT, yHigh, GRAPH_W, yLow - yHigh, COLOR_GRAPH_TARGET_FILL);
-        // High zone (above TARGET_HIGH): only if TARGET_HIGH is below the axis maximum
         if (TARGET_HIGH < yAxisMax) {
             g.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_W, yHigh - GRAPH_TOP, COLOR_GRAPH_HIGH_FILL);
         }
     }
 #endif  // GRAPH_ZONE_FILLS
 
-    // ── Graph: horizontal glucose grid lines + Y-axis labels ───────
-    // Draw a faint horizontal line every GRAPH_HGRID_STEP mg/dL across the
-    // visible Y range, with the glucose value printed to the left.
-    // The target boundary lines (orange/red) are drawn afterwards so they
-    // always appear on top of the grid.
     {
         const int step = GRAPH_HGRID_STEP;
-        // Round up to the first multiple of step at or above yAxisMin
         int firstGrid = ((yAxisMin + step - 1) / step) * step;
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
@@ -823,13 +782,13 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             int y = sgvToY(v);
             if (y >= GRAPH_TOP && y <= GRAPH_BOTTOM) {
                 g.drawFastHLine(GRAPH_LEFT, y, GRAPH_W, COLOR_GRAPH_HGRID_LINE);
-                g.drawString(String(v), GRAPH_LEFT - 1, y);
+                if (GRAPH_SHOW_LABELS_ENABLED) {
+                    g.drawString(String(v), GRAPH_LEFT - 1, y);
+                }
             }
         }
     }
 
-    // ── Graph: target boundary lines ──────────────────────────────
-    // High line = orange (approaching high risk), Low line = red (low risk)
     drawDashedHLine(g, GRAPH_LEFT, sgvToY(TARGET_HIGH), GRAPH_W,
                     COLOR_GRAPH_HIGH_LINE,
                     GRAPH_TARGET_DASH_LEN,
@@ -839,13 +798,8 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                     GRAPH_TARGET_DASH_LEN,
                     GRAPH_TARGET_GAP_LEN);
 
-    // ── Graph: X-axis 10-minute grid lines + time labels ──────────
     if (g_ntpSynced && nowMs > 0) {
-        // Draw 10-minute vertical lines and label them as HH:MM.
-        // Labels are culled when too close to keep the axis readable.
         const int64_t tenMinMs = 600000LL;
-        // Start at the latest 10-minute boundary before "now"
-        // (e.g. 19:37 -> 19:30), then step backward by 10 minutes.
         int64_t firstTenMin = (nowMs / tenMinMs) * tenMinMs;
 
         g.setFont(&lgfx::fonts::Font0);
@@ -864,7 +818,8 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                                 GRAPH_10MIN_DASH_LEN,
                                 GRAPH_10MIN_GAP_LEN);
 
-                if ((lastLabelX - x) >= minLabelSpacingPx &&
+                if (GRAPH_SHOW_LABELS_ENABLED &&
+                    (lastLabelX - x) >= minLabelSpacingPx &&
                     x > GRAPH_LEFT + 8 && x < GRAPH_RIGHT - 8) {
                     time_t secs = (time_t)(t / 1000LL);
                     struct tm ti;
@@ -878,7 +833,46 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         }
     }
 
-    // ── Graph: scatter dots (oldest → newest so latest renders on top) ─
+    if (g_ntpSynced && nowMs > 0) {
+        int nowX = msToX(nowMs);
+        if (nowX < GRAPH_LEFT)  nowX = GRAPH_LEFT;
+        if (nowX > GRAPH_RIGHT) nowX = GRAPH_RIGHT;
+        g.drawFastVLine(nowX, GRAPH_TOP, GRAPH_H, COLOR_GRAPH_NOW_LINE);
+    }
+
+#if SHOW_LINE
+    {
+        bool havePrev = false;
+        int prevX = 0;
+        int prevY = 0;
+        int prevSgv = 0;
+
+        for (int i = g_graphHistoryLen - 1; i >= 0; i--) {
+            int     sgv  = g_graphHistory[i].sgv;
+            int64_t msTs = g_graphHistory[i].dateMs;
+            if (sgv <= 0) continue;
+            if (nowMs > 0 && msTs < oldestMs) continue;
+
+            int px = (nowMs > 0) ? msToX(msTs)
+                                 : (GRAPH_LEFT + i * GRAPH_W / max(1, g_graphHistoryLen));
+            int py = sgvToY(sgv);
+            if (px < GRAPH_LEFT || px > GRAPH_RIGHT) continue;
+            if (py < GRAPH_TOP  || py > GRAPH_BOTTOM) continue;
+
+            if (havePrev) {
+                int avgSgv = (prevSgv + sgv) / 2;
+                uint16_t lineColor = glucoseColorGraph(avgSgv, dataMin, dataMax);
+                g.drawLine(prevX, prevY, px, py, lineColor);
+            }
+
+            prevX = px;
+            prevY = py;
+            prevSgv = sgv;
+            havePrev = true;
+        }
+    }
+#endif
+
     for (int i = g_graphHistoryLen - 1; i >= 0; i--) {
         int     sgv  = g_graphHistory[i].sgv;
         int64_t msTs = g_graphHistory[i].dateMs;
