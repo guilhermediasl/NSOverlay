@@ -73,3 +73,24 @@
 
 // BL PWM brightness 0-255 (255 = full brightness)
 #define LCD_BRIGHTNESS  200
+
+// ---- Glucose history graph --------------------------------------
+// Set GRAPH_ENABLED to 1 to show a scrolling glucose history graph
+// at the bottom of the display.  The main-reading area is compacted
+// automatically to make room.  Set to 0 to restore the original
+// full-screen layout with no graph.
+#define GRAPH_ENABLED         1
+
+// Show axis tick labels on the graph (glucose values on the Y-axis,
+// relative time on the X-axis).  Setting to 0 hides all labels and
+// extends the plot area into the margin space.
+#define GRAPH_SHOW_LABELS     1
+
+// How many minutes of glucose history to show on the graph.
+// Each Nightscout reading covers ~5 minutes, so 120 min ≈ 24 dots.
+#define GRAPH_HISTORY_MINUTES 120
+
+// Y-axis range of the graph (mg/dL).  Readings outside this range
+// are clamped to the nearest edge.
+#define GRAPH_Y_MIN  40
+#define GRAPH_Y_MAX  400

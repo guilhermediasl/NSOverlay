@@ -135,6 +135,14 @@ static String         g_error       = "";
 static bool           g_ntpSynced   = false;
 static unsigned long  g_lastFetchMs = 0;
 
+#if GRAPH_ENABLED
+// Maximum number of historical readings held in RAM.
+// +2 gives a small safety margin beyond the requested window.
+#define GRAPH_MAX_POINTS  ((GRAPH_HISTORY_MINUTES) / 5 + 2)
+static GlucoseReading g_history[GRAPH_MAX_POINTS];
+static int            g_historyCount = 0;
+#endif
+
 // =================================================================
 // Helpers
 // =================================================================
@@ -218,7 +226,12 @@ static bool fetchNightscout() {
     client.setInsecure();
 
     HTTPClient http;
-    String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=2";
+#if GRAPH_ENABLED
+    int count = GRAPH_MAX_POINTS;
+#else
+    int count = 2;
+#endif
+    String url = String(NIGHTSCOUT_URL) + "/api/v1/entries.json?count=" + String(count);
     http.begin(client, url);
     http.setTimeout(8000);
 
@@ -236,7 +249,9 @@ static bool fetchNightscout() {
     String body = http.getString();
     http.end();
 
-    StaticJsonDocument<2048> doc;
+    // Each Nightscout entry is ~250-300 bytes of JSON.  Allocate on the
+    // heap to avoid overflowing the stack.
+    DynamicJsonDocument doc(count * 400);
     DeserializationError err = deserializeJson(doc, body);
     if (err || !doc.is<JsonArray>()) {
         g_error = "JSON invalido";
@@ -249,20 +264,168 @@ static bool fetchNightscout() {
         return false;
     }
 
+#if GRAPH_ENABLED
+    // Store all returned readings (newest first, matching Nightscout order).
+    g_historyCount = 0;
+    for (int i = 0; i < (int)arr.size() && i < GRAPH_MAX_POINTS; i++) {
+        GlucoseReading r;
+        r.sgv       = arr[i]["sgv"]       | 0;
+        r.direction = arr[i]["direction"].as<String>();
+        r.dateMs    = arr[i]["date"]      | (int64_t)0;
+        r.valid     = (r.sgv > 0);
+        g_history[i] = r;
+        g_historyCount++;
+    }
+    g_reading = g_history[0];
+    if (g_historyCount >= 2) {
+        g_reading.delta = g_history[0].sgv - g_history[1].sgv;
+    }
+#else
     GlucoseReading r;
     r.sgv       = arr[0]["sgv"]       | 0;
     r.direction = arr[0]["direction"].as<String>();
     r.dateMs    = arr[0]["date"]      | (int64_t)0;
     r.valid     = (r.sgv > 0);
-
     if (arr.size() >= 2) {
         r.delta = r.sgv - (int)(arr[1]["sgv"] | 0);
     }
-
     g_reading = r;
-    g_error   = "";
+#endif
+
+    g_error = "";
     return true;
 }
+
+// =================================================================
+// Glucose history graph
+// =================================================================
+#if GRAPH_ENABLED
+
+// Map a glucose value (mg/dL) to a Y pixel inside the plot area.
+// Higher glucose → lower Y (higher on screen).
+static int glucoseToY(int sgv, int plotY, int plotH) {
+    if (sgv < GRAPH_Y_MIN) sgv = GRAPH_Y_MIN;
+    if (sgv > GRAPH_Y_MAX) sgv = GRAPH_Y_MAX;
+    float frac = (float)(sgv - GRAPH_Y_MIN) / (float)(GRAPH_Y_MAX - GRAPH_Y_MIN);
+    return plotY + plotH - 1 - (int)(frac * (float)(plotH - 1));
+}
+
+// Draw the glucose history graph occupying [graphTop, graphBottom) px.
+//
+// Layout intent
+// -------------
+//   • Older readings sit to the LEFT, current time is anchored to the
+//     RIGHT edge as a bright vertical line.
+//   • Dots (readings) appear to the LEFT of that line, so the visual
+//     gap between the last dot and the "now" line makes data staleness
+//     immediately obvious.
+//   • When GRAPH_SHOW_LABELS is 0 the axis margins collapse and the
+//     plot area expands to fill the freed space.
+static void drawGraph(int graphTop, int graphBottom) {
+    if (!g_ntpSynced || g_historyCount == 0) return;
+
+    const int W      = LCD_WIDTH;
+    const int graphH = graphBottom - graphTop;
+
+    // Margins – shrink when labels are suppressed to widen the plot.
+#if GRAPH_SHOW_LABELS
+    const int marginLeft   = 28;
+    const int marginBottom = 14;
+#else
+    const int marginLeft   = 3;
+    const int marginBottom = 3;
+#endif
+    const int marginTop   = 2;
+    const int marginRight = 4;
+
+    // Plot area (pixel coordinates inside the canvas)
+    const int plotX = marginLeft;
+    const int plotY = graphTop + marginTop;
+    const int plotW = W - marginLeft - marginRight;
+    const int plotH = graphH - marginTop - marginBottom;
+    if (plotW <= 0 || plotH <= 0) return;
+
+    // Dark background for the plot
+    canvas.fillRect(plotX, plotY, plotW, plotH, canvas.color565(10, 10, 10));
+
+    // Target-range band (subtle green fill)
+    {
+        int yLow  = glucoseToY(TARGET_LOW,  plotY, plotH);
+        int yHigh = glucoseToY(TARGET_HIGH, plotY, plotH);
+        if (yLow > yHigh) {   // sanity (yLow > yHigh because Y increases downward)
+            canvas.fillRect(plotX, yHigh, plotW, yLow - yHigh,
+                            canvas.color565(0, 35, 0));
+        }
+    }
+
+    // Horizontal grid lines at the target boundaries
+    canvas.drawFastHLine(plotX, glucoseToY(TARGET_LOW,  plotY, plotH),
+                         plotW, canvas.color565(40, 80, 40));
+    canvas.drawFastHLine(plotX, glucoseToY(TARGET_HIGH, plotY, plotH),
+                         plotW, canvas.color565(40, 80, 40));
+
+    // Time window: left edge = (now - history window), right edge = now
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    int64_t nowMs    = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+    int64_t windowMs = (int64_t)GRAPH_HISTORY_MINUTES * 60000LL;
+    int64_t startMs  = nowMs - windowMs;
+
+    // Draw data dots (oldest → newest so newer ones paint on top)
+    for (int i = g_historyCount - 1; i >= 0; i--) {
+        if (!g_history[i].valid) continue;
+        int64_t t = g_history[i].dateMs;
+        if (t < startMs || t > nowMs) continue;
+
+        int x = plotX + (int)((t - startMs) * (int64_t)plotW / windowMs);
+        int y = glucoseToY(g_history[i].sgv, plotY, plotH);
+        canvas.fillCircle(x, y, 2, glucoseColor(g_history[i].sgv));
+    }
+
+    // Vertical "now" line at the right edge of the plot
+    canvas.drawFastVLine(plotX + plotW - 1, plotY, plotH,
+                         canvas.color565(180, 180, 180));
+
+    // ---- Axis labels (optional) ----------------------------------
+#if GRAPH_SHOW_LABELS
+    canvas.setFont(&lgfx::fonts::Font0);
+    canvas.setTextSize(1);
+
+    // Y-axis: glucose values, right-aligned just left of the plot
+    canvas.setTextColor(canvas.color565(110, 110, 110));
+    canvas.setTextDatum(lgfx::middle_right);
+    canvas.drawString(String(TARGET_LOW),  plotX - 2,
+                      glucoseToY(TARGET_LOW,  plotY, plotH));
+    canvas.drawString(String(TARGET_HIGH), plotX - 2,
+                      glucoseToY(TARGET_HIGH, plotY, plotH));
+    if (GRAPH_Y_MAX >= 300) {
+        canvas.drawString("300", plotX - 2, glucoseToY(300, plotY, plotH));
+    }
+
+    // X-axis: relative time ticks, top-centre below the plot
+    int xAxisY = plotY + plotH + 1;
+    canvas.setTextDatum(lgfx::top_center);
+
+    // Helper: draw one X tick + label at `minutesAgo` minutes before now
+    auto drawXTick = [&](int minutesAgo, const char* label) {
+        int64_t t = nowMs - (int64_t)minutesAgo * 60000LL;
+        if (t < startMs) return;
+        int x = plotX + (int)((t - startMs) * (int64_t)plotW / windowMs);
+        canvas.drawFastVLine(x, plotY + plotH, 3, canvas.color565(70, 70, 70));
+        canvas.drawString(label, x, xAxisY);
+    };
+
+    if (GRAPH_HISTORY_MINUTES >= 120) drawXTick(120, "-2h");
+    if (GRAPH_HISTORY_MINUTES >=  90) drawXTick( 90, "-90m");
+    if (GRAPH_HISTORY_MINUTES >=  60) drawXTick( 60, "-1h");
+    if (GRAPH_HISTORY_MINUTES >=  30) drawXTick( 30, "-30m");
+
+    // "now" label at the right edge, right-aligned
+    canvas.setTextDatum(lgfx::top_right);
+    canvas.drawString("now", plotX + plotW + marginRight - 1, xAxisY);
+#endif  // GRAPH_SHOW_LABELS
+}
+#endif  // GRAPH_ENABLED
 
 // =================================================================
 // Display rendering
@@ -273,12 +436,32 @@ static void renderDisplay() {
 
     canvas.fillSprite(TFT_BLACK);
 
+    // When the graph is enabled we compact the info area upward to
+    // make room.  The constants below switch between the two layouts.
+#if GRAPH_ENABLED
+    const int Y_HEADER  =   6;
+    const int Y_GLUCOSE =  60;
+    const int Y_UNITS   =  90;
+    const int Y_DELTA   = 112;
+    const int Y_AGE     = 134;
+    const int Y_STALE   = 150;
+    const int GRAPH_TOP = 163;
+    const int GRAPH_BOT = 265;
+#else
+    const int Y_HEADER  =   8;
+    const int Y_GLUCOSE = 105;
+    const int Y_UNITS   = 135;
+    const int Y_DELTA   = 180;
+    const int Y_AGE     = 215;
+    const int Y_STALE   = 240;
+#endif
+
     // ---- Header -------------------------------------------------
     canvas.setTextColor(lcd.color565(120, 120, 120));
     canvas.setFont(&lgfx::fonts::Font2);
     canvas.setTextSize(1);
     canvas.setTextDatum(lgfx::top_center);
-    canvas.drawString("GLICEMIA", W / 2, 8);
+    canvas.drawString("GLICEMIA", W / 2, Y_HEADER);
 
     if (!g_reading.valid) {
         // ---- Error / loading state ------------------------------
@@ -295,19 +478,19 @@ static void renderDisplay() {
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_center);
         // Shift left to leave room for the trend arrow
-        canvas.drawString(String(g_reading.sgv), W / 2 - 18, 105);
+        canvas.drawString(String(g_reading.sgv), W / 2 - 18, Y_GLUCOSE);
 
         // ---- Trend arrow ----------------------------------------
         canvas.setFont(&lgfx::fonts::Font4);   // 26-px
         canvas.setTextColor(col);
         canvas.setTextDatum(lgfx::middle_right);
-        canvas.drawString(trendArrow(g_reading.direction), W - 6, 105);
+        canvas.drawString(trendArrow(g_reading.direction), W - 6, Y_GLUCOSE);
 
         // ---- Units label ----------------------------------------
         canvas.setFont(&lgfx::fonts::Font2);
         canvas.setTextColor(lcd.color565(140, 140, 140));
         canvas.setTextDatum(lgfx::top_center);
-        canvas.drawString("mg/dL", W / 2 - 18, 135);
+        canvas.drawString("mg/dL", W / 2 - 18, Y_UNITS);
 
         // ---- Delta ----------------------------------------------
         String deltaStr = (g_reading.delta >= 0 ? "+" : "")
@@ -315,7 +498,7 @@ static void renderDisplay() {
         canvas.setFont(&lgfx::fonts::Font4);
         canvas.setTextColor(lcd.color565(100, 210, 230));
         canvas.setTextDatum(lgfx::middle_center);
-        canvas.drawString(deltaStr, W / 2, 180);
+        canvas.drawString(deltaStr, W / 2, Y_DELTA);
 
         // ---- Age of reading -------------------------------------
         String age = ageLabel(g_reading.dateMs);
@@ -323,7 +506,7 @@ static void renderDisplay() {
             canvas.setFont(&lgfx::fonts::Font2);
             canvas.setTextColor(lcd.color565(120, 120, 120));
             canvas.setTextDatum(lgfx::middle_center);
-            canvas.drawString(age, W / 2, 215);
+            canvas.drawString(age, W / 2, Y_AGE);
         }
 
         // ---- Stale-data warning (reading older than 15 min) -----
@@ -336,9 +519,13 @@ static void renderDisplay() {
                 canvas.setFont(&lgfx::fonts::Font2);
                 canvas.setTextColor(TFT_YELLOW);
                 canvas.setTextDatum(lgfx::middle_center);
-                canvas.drawString("! DADO ANTIGO !", W / 2, 240);
+                canvas.drawString("! DADO ANTIGO !", W / 2, Y_STALE);
             }
         }
+
+#if GRAPH_ENABLED
+        drawGraph(GRAPH_TOP, GRAPH_BOT);
+#endif
     }
 
     // ---- Status bar (bottom) ------------------------------------
