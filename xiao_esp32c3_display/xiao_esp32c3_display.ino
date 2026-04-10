@@ -891,6 +891,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         if (py < GRAPH_TOP  || py > GRAPH_BOTTOM) continue;
 
         uint16_t dotColor = glucoseColorGraph(sgv, dataMin, dataMax);
+        g.fillCircle(px, py, 4, 0x0000);  // black border ring
         g.fillCircle(px, py, 3, dotColor);
     }
 }
