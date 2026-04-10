@@ -754,7 +754,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     }
 
     // ── Header: left column — clock + age ────────────────────────
-    // Row 1 (y≈18): Clock in FONT_LARGE (bold, highly readable)
+    // Row 1 (y≈26): Clock in FONT_LARGE (bold, highly readable)
+    // y=26 with middle_left places the text top at ~8 px, clearing the
+    // display's rounded-corner clip zone (was y=18 → top at ~0 → cutout).
     // Row 2 (y≈44): Age of reading in FONT_SMALL; stale prefix "! " when ≥ 15 min
     {
         String clk = clockString();
@@ -763,7 +765,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             g.setTextSize(1);
             g.setTextColor(COLOR_CLOCK);
             g.setTextDatum(lgfx::middle_left);
-            g.drawString(clk, L_X, 18);
+            g.drawString(clk, L_X, 26);
         }
     }
     if (g_reading.valid && g_reading.dateMs > 0 && g_ntpSynced) {
