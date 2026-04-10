@@ -134,6 +134,8 @@
 // A line + Y-axis label is drawn at every multiple of this value within the
 // visible Y range.  50 is a good default for a 3-hour window.
 #define GRAPH_HGRID_STEP 50
+#define SHOW_LABELS 1       // 1 = show X/Y labels, 0 = hide labels and extend graph area
+#define SHOW_LINE 1         // 1 = draw trend line between dots, 0 = dots only
 
 // ---- Display colours --------------------------------------------
 // All colour constants are 16-bit RGB-565 values.
