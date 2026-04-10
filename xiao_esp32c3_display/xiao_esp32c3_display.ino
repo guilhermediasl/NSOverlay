@@ -105,6 +105,23 @@
 #define GRAPH_TARGET_GAP_LEN 8
 #endif
 
+// New graph options — default to the "classic" behaviour for existing configs.
+#ifndef GRAPH_RIGHT_PAD_MINUTES
+#define GRAPH_RIGHT_PAD_MINUTES 10
+#endif
+
+#ifndef SHOW_Y_LABELS
+#define SHOW_Y_LABELS 1
+#endif
+
+#ifndef SHOW_X_LABELS
+#define SHOW_X_LABELS 1
+#endif
+
+#ifndef COLOR_GRAPH_CURRENT_TIME
+#define COLOR_GRAPH_CURRENT_TIME RGB565(160, 160, 160)
+#endif
+
 // ---- Font size variants (resolved from DISPLAY_FONT in config.h) -
 #if   DISPLAY_FONT == FONT_FAMILY_FREE_SANS_BOLD
 #  define FONT_LARGE   lgfx::fonts::FreeSansBold18pt7b
@@ -626,8 +643,16 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
 
     // Graph area (below header separator)
     const int GRAPH_TOP    = HEADER_H + 3;
+#if SHOW_X_LABELS
     const int GRAPH_BOTTOM = H - 13;          // 13 px for X-axis labels
+#else
+    const int GRAPH_BOTTOM = H - 2;           // no bottom margin when X labels hidden
+#endif
+#if SHOW_Y_LABELS
     const int GRAPH_LEFT   = 24;              // left margin for Y-axis labels
+#else
+    const int GRAPH_LEFT   = 2;               // no left margin when Y labels hidden
+#endif
     const int GRAPH_RIGHT  = W - 2;
     const int GRAPH_H      = GRAPH_BOTTOM - GRAPH_TOP;
     const int GRAPH_W      = GRAPH_RIGHT - GRAPH_LEFT;
@@ -686,8 +711,13 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
     int64_t oldestMs = nowMs - windowMs;
 
     auto msToX = [&](int64_t ms) -> int {
-        if (windowMs <= 0) return GRAPH_LEFT;
-        return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / windowMs);
+        // The effective window is extended by RIGHT_PAD_MINUTES so that
+        // nowMs maps to a point LEFT of GRAPH_RIGHT, shifting all dots
+        // toward the left and leaving room for the current-time line.
+        const int64_t rightPadMs  = (int64_t)GRAPH_RIGHT_PAD_MINUTES * 60000LL;
+        const int64_t totalWindowMs = windowMs + rightPadMs;
+        if (totalWindowMs <= 0) return GRAPH_LEFT;
+        return GRAPH_LEFT + (int)((ms - oldestMs) * (int64_t)GRAPH_W / totalWindowMs);
     };
 
     // ── Header: right column — glucose + arrow + (delta) ──────────
@@ -823,7 +853,9 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
             int y = sgvToY(v);
             if (y >= GRAPH_TOP && y <= GRAPH_BOTTOM) {
                 g.drawFastHLine(GRAPH_LEFT, y, GRAPH_W, COLOR_GRAPH_HGRID_LINE);
+#if SHOW_Y_LABELS
                 g.drawString(String(v), GRAPH_LEFT - 1, y);
+#endif
             }
         }
     }
@@ -848,10 +880,12 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         // (e.g. 19:37 -> 19:30), then step backward by 10 minutes.
         int64_t firstTenMin = (nowMs / tenMinMs) * tenMinMs;
 
+#if SHOW_X_LABELS
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
         g.setTextDatum(lgfx::top_center);
+#endif
 
         int lastLabelX = GRAPH_RIGHT + 1000;
         const int minLabelSpacingPx = 28;
@@ -864,6 +898,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                                 GRAPH_10MIN_DASH_LEN,
                                 GRAPH_10MIN_GAP_LEN);
 
+#if SHOW_X_LABELS
                 if ((lastLabelX - x) >= minLabelSpacingPx &&
                     x > GRAPH_LEFT + 8 && x < GRAPH_RIGHT - 8) {
                     time_t secs = (time_t)(t / 1000LL);
@@ -874,7 +909,17 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                     g.drawString(tbuf, x, GRAPH_BOTTOM + 2);
                     lastLabelX = x;
                 }
+#endif
             }
+        }
+
+        // ── Graph: current-time vertical line ──────────────────────
+        // Drawn after the 10-min grid so it appears on top.
+        // The right-padding shifts all dots to the left of this line,
+        // making the staleness gap since the newest reading obvious.
+        int nowX = msToX(nowMs);
+        if (nowX > GRAPH_LEFT && nowX <= GRAPH_RIGHT) {
+            g.drawFastVLine(nowX, GRAPH_TOP, GRAPH_H, COLOR_GRAPH_CURRENT_TIME);
         }
     }
 

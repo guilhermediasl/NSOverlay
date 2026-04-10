@@ -103,6 +103,8 @@
 // (one entry every 5 min) so a full trend line is visible on screen.
 // The graph shows:
 //   • Coloured scatter dots (red / orange / green) per reading
+//   • A vertical line at the current time, making the gap from the
+//     newest entry clearly visible (dots are shifted left of it)
 //   • Optional shaded zone fills between target lines (GRAPH_ZONE_FILLS)
 //   • Boundary lines at TARGET_LOW and TARGET_HIGH
 //   • Dynamic Y axis: always shows the full target range; expands
@@ -117,6 +119,12 @@
 //   Larger windows need more heap for the JSON response; 240 is the
 //   practical maximum on the ESP32C3 with WiFi active.
 //
+// GRAPH_RIGHT_PAD_MINUTES – blank right-side padding (minutes) added after
+//   the current-time line.  The X-axis range is extended by this amount so
+//   the newest CGM dots sit clearly to the LEFT of the current-time line,
+//   making the staleness gap visually obvious.
+//   Typical value: 10.  Set to 0 to disable (current time at right edge).
+//
 // GRAPH_ZONE_FILLS – set to 1 (default) to paint faint coloured
 //   backgrounds in the low / target / high zones, or 0 for a clean
 //   black-background graph with only the boundary lines shown.
@@ -126,14 +134,24 @@
 //   This controls how many entries are fetched: GRAPH_MINUTES / GRAPH_ENTRY_INTERVAL + 4.
 //   Setting it too high means less data fills the graph; too low just fetches
 //   slightly more entries than needed (no visual impact, small extra payload).
-#define GRAPH_ENTRY_INTERVAL 5
-#define SHOW_GRAPH       1
-#define GRAPH_MINUTES    180
-#define GRAPH_ZONE_FILLS 1
+#define GRAPH_ENTRY_INTERVAL    5
+#define SHOW_GRAPH              1
+#define GRAPH_MINUTES           180
+#define GRAPH_RIGHT_PAD_MINUTES 10
+#define GRAPH_ZONE_FILLS        1
 // GRAPH_HGRID_STEP – glucose value interval (mg/dL) for horizontal grid lines.
 // A line + Y-axis label is drawn at every multiple of this value within the
 // visible Y range.  50 is a good default for a 3-hour window.
 #define GRAPH_HGRID_STEP 50
+
+// SHOW_Y_LABELS – set to 1 (default) to draw glucose values on the Y axis,
+//   or 0 to hide them.  When hidden the left graph margin shrinks and the
+//   plot area is wider.
+// SHOW_X_LABELS – set to 1 (default) to draw HH:MM time labels on the X axis,
+//   or 0 to hide them.  When hidden the bottom graph margin shrinks and the
+//   plot area is taller.
+#define SHOW_Y_LABELS 1
+#define SHOW_X_LABELS 1
 
 // ---- Display colours --------------------------------------------
 // All colour constants are 16-bit RGB-565 values.
@@ -167,17 +185,18 @@
 #define COLOR_STATUS_ERR    TFT_RED
 
 // Graph colours (only relevant when SHOW_GRAPH = 1)
-#define COLOR_GRAPH_TARGET_FILL  RGB565(  0,  40,   0)   // dark green fill between target lines
-#define COLOR_GRAPH_TARGET_LINE  RGB565(  0, 130,   0)   // brighter green boundary lines (unused — see HIGH/LOW below)
-#define COLOR_GRAPH_HIGH_LINE    RGB565(255, 190,  40)   // bright orange – high target boundary line
-#define COLOR_GRAPH_LOW_LINE     RGB565(255,  90,  90)   // bright red    – low  target boundary line
-#define COLOR_GRAPH_LOW_FILL     RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
-#define COLOR_GRAPH_HIGH_FILL    RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
-#define COLOR_GRAPH_10MIN_LINE   RGB565( 30,  30,  30)   // very dim grey – 10-minute vertical grid lines
-#define COLOR_GRAPH_HGRID_LINE   RGB565( 35,  35,  35)   // very dim grey – horizontal glucose grid lines
-#define COLOR_GRAPH_AXIS         RGB565( 90,  90,  90)   // axis lines / tick marks
-#define COLOR_GRAPH_AXIS_LABEL   RGB565(120, 120, 120)   // X / Y axis text
-#define COLOR_GRAPH_BORDER       RGB565( 50,  50,  50)   // graph area border
+#define COLOR_GRAPH_TARGET_FILL     RGB565(  0,  40,   0)   // dark green fill between target lines
+#define COLOR_GRAPH_TARGET_LINE     RGB565(  0, 130,   0)   // brighter green boundary lines (unused — see HIGH/LOW below)
+#define COLOR_GRAPH_HIGH_LINE       RGB565(255, 190,  40)   // bright orange – high target boundary line
+#define COLOR_GRAPH_LOW_LINE        RGB565(255,  90,  90)   // bright red    – low  target boundary line
+#define COLOR_GRAPH_LOW_FILL        RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
+#define COLOR_GRAPH_HIGH_FILL       RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
+#define COLOR_GRAPH_10MIN_LINE      RGB565( 30,  30,  30)   // very dim grey – 10-minute vertical grid lines
+#define COLOR_GRAPH_HGRID_LINE      RGB565( 35,  35,  35)   // very dim grey – horizontal glucose grid lines
+#define COLOR_GRAPH_AXIS            RGB565( 90,  90,  90)   // axis lines / tick marks
+#define COLOR_GRAPH_AXIS_LABEL      RGB565(120, 120, 120)   // X / Y axis text
+#define COLOR_GRAPH_BORDER          RGB565( 50,  50,  50)   // graph area border
+#define COLOR_GRAPH_CURRENT_TIME    RGB565(160, 160, 160)   // vertical line marking the current time
 
 // Hour marks on X axis:
 // 0 = short tick at the bottom (default)
