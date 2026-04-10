@@ -12,23 +12,45 @@ and fetches real-time CGM readings directly from your Nightscout instance.
 
 ## What it shows
 
+### Simple mode (`SHOW_GRAPH 0`)
+
 ```
-┌────────────────────────┐
-│        GLICEMIA        │   ← title
-│                        │
-│       128    ^         │   ← glucose value (mg/dL) + trend arrow
-│            mg/dL       │   ← unit label
-│        +5 mg/dL        │   ← delta vs previous reading
-│        há 3 min        │   ← age of reading
-│                        │
-│ WiFi OK        NS: OK  │   ← status bar
-└────────────────────────┘
+┌──────────────────────────────────────┐
+│              16:30                   │  ← clock
+│                                      │
+│    133    →    +1                    │  ← glucose · arrow · delta (Font7)
+│                                      │
+│          2 min atras                 │  ← age of reading
+│                                      │
+│ WiFi OK                    NS: OK   │  ← status bar
+└──────────────────────────────────────┘
 ```
 
-* **Green** value = in target range  
-* **Orange** value = above target  
-* **Red** value = below target (low glucose)  
-* A **"! DADO ANTIGO !"** warning appears when the reading is ≥ 15 min old
+### Graph mode (`SHOW_GRAPH 1`, default)
+
+```
+┌──────────────────────────────────────────┐
+│ 16:30   │    128  →  +3                 │  ← NSOverlay-style header
+│ 2m atras│                               │    left: clock + age + status
+│ WiFi NS │                               │    right: large glucose + arrow
+├──────────────────────────────────────────┤  ← separator
+│  ●  ● ●●   ●   ●●●                     │
+│              ●●       ● ● ● ● ● ●   ●  │  ← coloured dots
+│  ────────────────────────────── 180     │  ← TARGET_HIGH line
+│  [optional target zone fill]            │
+│  ──────────────────────────────  70     │  ← TARGET_LOW line
+│     |    |    |    |    |    |         │  ← 10-minute lines
+│   14:00 14:10 14:20 14:30 14:40 14:50   │
+└──────────────────────────────────────────┘
+```
+
+* **Green** dot = in target range · **Orange** = above target · **Red** = below target
+* **Latest reading** is drawn with a larger dot and an outer ring for immediate visibility
+* **Dynamic Y axis** — always shows the full `TARGET_LOW`…`TARGET_HIGH` range at the borders; expands automatically if any reading falls outside (mirrors NSOverlay's adaptive scaling)
+* **Time axis** — dashed vertical lines appear every 10 minutes, with `HH:MM` labels on the axis; labels are automatically skipped when they would overlap
+* **Delta** is computed from the current reading minus the interpolated glucose value exactly 5 minutes earlier, matching the Windows NSOverlay app
+* **Stale-data** (≥ 15 min old): age label turns yellow; "! DADO ANTIGO !" badge appears in the left column
+* Zone background fills controlled by `GRAPH_ZONE_FILLS` — set to `0` for a clean black-background graph
 
 ---
 
@@ -91,7 +113,7 @@ Open the **Arduino Library Manager** (Ctrl+Shift+I) and install:
 
 ### 3 · Configure the sketch
 
-Open `config.h` and fill in:
+Copy `config.h.example` to `config.h`, then fill in:
 
 | Setting | Description |
 |---|---|
@@ -102,6 +124,78 @@ Open `config.h` and fill in:
 | `TARGET_LOW` / `TARGET_HIGH` | Your glucose target range in mg/dL |
 | `NTP_GMT_OFFSET_SEC` | Your UTC offset in seconds (Brazil UTC-3 → `-10800`) |
 | `REFRESH_INTERVAL_MS` | How often to poll Nightscout (default 60 000 ms) |
+| `SHOW_GRAPH` | `1` (default) = graph mode · `0` = simple large-value layout |
+| `GRAPH_MINUTES` | Time window shown in graph mode (default `180` = 3 h) |
+| `GRAPH_ENTRY_INTERVAL` | Expected gap between CGM readings in minutes (default `5`; set to `1` if your Nightscout logs every minute) |
+| `GRAPH_ZONE_FILLS` | `1` (default) = draw faint coloured zone backgrounds · `0` = clean black background |
+| `GRAPH_HGRID_STEP` | Glucose interval (mg/dL) between horizontal grid lines (default `50`) |
+| `GRAPH_HOUR_LINES_FULL_HEIGHT` | `1` = draw full-height dashed hour guides · `0` = keep short hour ticks |
+| `GRAPH_10MIN_DASH_LEN` / `GRAPH_10MIN_GAP_LEN` | Dash pattern for 10-minute vertical lines |
+| `GRAPH_HOUR_DASH_LEN` / `GRAPH_HOUR_GAP_LEN` | Dash pattern for hour guides when full-height mode is enabled |
+| `GRAPH_TARGET_DASH_LEN` / `GRAPH_TARGET_GAP_LEN` | Dash pattern for `TARGET_LOW` and `TARGET_HIGH` boundary lines |
+| `DISPLAY_FONT` | Font family for UI labels — see [Compatible fonts](#compatible-fonts) below |
+| `COLOR_*` | 16-bit colours for every UI element — see [Display colours](#display-colours) below |
+
+---
+
+## Compatible fonts
+
+Set `DISPLAY_FONT` in `config.h` to one of the four families below.
+The glucose number always uses the built-in 7-segment `Font7`; `DISPLAY_FONT`
+controls every other text element (clock, age label, error message, splash screen).
+
+All fonts are bundled with the **LovyanGFX** library — no additional installation needed.
+
+| `DISPLAY_FONT` value | Appearance | Size variants used |
+|---|---|---|
+| `FONT_FAMILY_FREE_SANS_BOLD` *(default)* | Bold proportional sans-serif (Helvetica / Android style — best screen readability) | Bold 18 pt · Regular 12 pt · Regular 9 pt |
+| `FONT_FAMILY_FREE_SANS` | Regular proportional sans-serif (lighter weight, more elegant) | Regular 18 pt · 12 pt · 9 pt |
+| `FONT_FAMILY_FREE_MONO` | Fixed-width monospaced (digital / retro look, numbers align vertically) | Mono 18 pt · 12 pt · 9 pt |
+| `FONT_FAMILY_FREE_SERIF` | Traditional serif (similar to Times New Roman) | Serif 18 pt · 12 pt · 9 pt |
+
+> **Tip:** The full GNU FreeFont collection available in LovyanGFX also includes oblique /
+> italic and bold-oblique variants such as `FreeSansOblique12pt7b`, but these are not
+> wrapped in a family constant.  You can use individual sizes directly by assigning
+> `FONT_LARGE`, `FONT_MEDIUM`, and `FONT_SMALL` yourself after the `#include "config.h"`
+> line in the sketch.
+
+---
+
+## Display colours
+
+All `COLOR_*` constants in `config.h` accept:
+
+- Any **`TFT_*` constant** from LovyanGFX (e.g. `TFT_BLACK`, `TFT_WHITE`, `TFT_RED`, `TFT_GREEN`, `TFT_YELLOW`, `TFT_ORANGE`, `TFT_CYAN`, `TFT_BLUE`)
+- The **`RGB565(r, g, b)`** macro (defined in the sketch) — converts 8-bit R, G, B components to a 16-bit value at compile time.
+
+| Constant | Default | Used for |
+|---|---|---|
+| `COLOR_BACKGROUND` | `TFT_BLACK` | Screen background |
+| `COLOR_GLUCOSE_LOW` | `RGB565(255, 68, 68)` | Glucose value when below `TARGET_LOW` |
+| `COLOR_GLUCOSE_HIGH` | `RGB565(255, 136, 0)` | Glucose value when above `TARGET_HIGH` |
+| `COLOR_GLUCOSE_OK` | `RGB565(0, 212, 170)` | Glucose value when in target range |
+| `COLOR_CLOCK` | `TFT_WHITE` | Clock text (top row) |
+| `COLOR_AGE_NORMAL` | `RGB565(210, 210, 210)` | Age-of-reading label when data is fresh |
+| `COLOR_AGE_STALE` | `TFT_YELLOW` | Age-of-reading label when data is ≥ 15 min old |
+| `COLOR_STALE_WARN` | `TFT_YELLOW` | `! DADO ANTIGO !` warning banner |
+| `COLOR_ERROR` | `TFT_RED` | Error / loading message |
+| `COLOR_STATUS_OK` | `TFT_GREEN` | `WiFi OK` / `NS: OK` in the status bar |
+| `COLOR_STATUS_ERR` | `TFT_RED` | `WiFi ERR` / `NS: ERR` in the status bar |
+| `COLOR_SPLASH_TITLE` | `TFT_WHITE` | "NSOverlay" title on the boot splash |
+| `COLOR_SPLASH_ACCENT` | `RGB565(100, 210, 230)` | Cyan subtitle on the boot splash |
+| `COLOR_SPLASH_DIM` | `RGB565(150, 150, 150)` | Grey status message on the boot splash |
+| `COLOR_GRAPH_TARGET_FILL` | `RGB565(0, 40, 0)` | Dark green fill for the target zone in the graph |
+| `COLOR_GRAPH_HIGH_LINE` | `RGB565(170, 100, 0)` | Dimmed orange line at `TARGET_HIGH` boundary |
+| `COLOR_GRAPH_LOW_LINE` | `RGB565(150, 40, 40)` | Dimmed red line at `TARGET_LOW` boundary |
+| `COLOR_GRAPH_LOW_FILL` | `RGB565(50, 0, 0)` | Dark red fill below the low-target zone in the graph |
+| `COLOR_GRAPH_HIGH_FILL` | `RGB565(50, 25, 0)` | Dark orange fill above the high-target zone in the graph |
+| `COLOR_GRAPH_10MIN_LINE` | `RGB565(65, 65, 65)` | Vertical line every 10 minutes on the graph |
+| `COLOR_GRAPH_HGRID_LINE` | `RGB565(35, 35, 35)` | Very dim horizontal line every `GRAPH_HGRID_STEP` mg/dL |
+| `COLOR_GRAPH_AXIS` | `RGB565(90, 90, 90)` | Axis lines and tick marks |
+| `COLOR_GRAPH_AXIS_LABEL` | `RGB565(120, 120, 120)` | X / Y axis text labels |
+| `COLOR_GRAPH_BORDER` | `RGB565(50, 50, 50)` | Graph area border and separator line |
+
+---
 
 ### 4 · Upload
 
@@ -143,12 +237,12 @@ Call `lcd.setRotation(n)` in `setup()` with:
 
 | Symptom | Fix |
 |---|---|
-| White / blank screen | Check all SPI wires; verify `LCD_OFFSET_Y = 20` in `config.h` |
+| White / blank screen | **First check**: do you see a brief **blue flash** at boot? If not, re-check all SPI wires (MOSI, CLK, CS, DC, RST). If you see blue but then blank, try lowering `freq_write` in the LGFX constructor. Check serial output for `[DISPLAY] Sprite OK` vs `sprite alloc failed`. |
 | Inverted colours | The ST7789 on the Waveshare 1.69″ requires `invert = true` (already set) |
-| "WiFi ERR" on status bar | Check SSID/password; move closer to the router |
+| "WiFi ERR" on status bar / connection timeout | The ESP32C3 supports **2.4 GHz only** — if your router has a separate 5 GHz network (often named `MySSID_5G`), use the 2.4 GHz SSID instead. Also check password and signal strength. |
 | "NS: ERR" on status bar | Verify `NIGHTSCOUT_URL` (no trailing slash) and `API_SECRET` |
 | Stale data warning | Your CGM transmitter may have stopped sending; check Nightscout |
-| Time is wrong | Set `NTP_GMT_OFFSET_SEC` correctly in `config.h` |
+| Time is wrong | Set `NTP_GMT_OFFSET_SEC` correctly in your local `config.h` |
 
 ---
 
@@ -157,6 +251,7 @@ Call `lcd.setRotation(n)` in `setup()` with:
 ```
 xiao_esp32c3_display/
 ├── xiao_esp32c3_display.ino   ← main Arduino sketch
+├── config.h.example            ← tracked template (copy to config.h)
 ├── config.h                   ← user configuration (WiFi, Nightscout, pins)
 └── README.md                  ← this file
 ```

@@ -79,6 +79,7 @@ widget_position.json
 zoom_state.json
 nsoverlay.log
 nsoverlay.log.*
+xiao_esp32c3_display/config.h
 
 # Personal configuration (contains API secrets)
 config.json

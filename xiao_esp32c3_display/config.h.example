@@ -1,0 +1,203 @@
+#pragma once
+
+// =============================================================
+// NSOverlay – XIAO ESP32C3 Nightscout Display
+// User Configuration Template
+// =============================================================
+// Copy this file to config.h and fill in your own values.
+// config.h is ignored by git so your Wi-Fi credentials stay local.
+// =============================================================
+
+// ---- WiFi -------------------------------------------------------
+// Your home/office WiFi network credentials.
+// IMPORTANT: The ESP32C3 supports 2.4 GHz WiFi ONLY.
+// If your router broadcasts separate 2.4 GHz and 5 GHz networks
+// (often named "MyNetwork" and "MyNetwork_5G"), you MUST use the
+// 2.4 GHz SSID here — the device will never connect to a 5 GHz network.
+#define WIFI_SSID       "YourWiFiSSID"       // <-- change (2.4 GHz band only)
+#define WIFI_PASSWORD   "YourWiFiPassword"   // <-- change
+
+// ---- Nightscout -------------------------------------------------
+// Full URL of your Nightscout site, NO trailing slash.
+// Examples:
+//   "https://mysite.fly.dev"
+//   "https://yourname.ns.10be.de"
+#define NIGHTSCOUT_URL  "https://your-site.fly.dev"  // <-- change
+
+// Plain-text API secret.  It will be SHA-1 hashed on the device
+// before being sent, matching Nightscout's own behaviour.
+// Leave as "" if your site has no API secret (TOKEN auth not
+// currently supported — use a public or secret-protected site).
+#define API_SECRET      ""   // <-- change or leave empty
+
+// ---- Glucose targets (mg/dL) ------------------------------------
+#define TARGET_LOW   70
+#define TARGET_HIGH  180
+
+// ---- Refresh interval -------------------------------------------
+// How often to fetch new data from Nightscout (milliseconds).
+// Nightscout typically stores a new reading every 5 minutes, so
+// 60 000 ms (60 s) is a sensible polling interval.
+#define REFRESH_INTERVAL_MS  60000UL
+
+// ---- NTP / timezone ---------------------------------------------
+// GMT offset in SECONDS for your timezone.
+// Examples:
+//   Brazil – Brasília (UTC-3): -3 * 3600 = -10800
+//   Portugal / UK (UTC+0):       0
+//   Central Europe (UTC+1):  3600
+#define NTP_GMT_OFFSET_SEC   (-3L * 3600L)  // UTC-3 (Brasília)
+#define NTP_DST_OFFSET_SEC   0L             // Brazil has no DST
+#define NTP_SERVER           "pool.ntp.org"
+
+// ---- Display hardware -------------------------------------------
+// These defaults match the Waveshare 1.69" IPS LCD (SKU 27057,
+// ST7789 controller, 240×280).  Adjust only if you use a
+// different panel.
+//
+// Pin numbers below are ESP32C3 GPIO numbers.
+// XIAO ESP32C3 silk-screen → GPIO mapping:
+//   D0  → GPIO2    D1  → GPIO3    D2  → GPIO4
+//   D3  → GPIO5    D4  → GPIO6    D5  → GPIO7
+//   D6  → GPIO21   D7  → GPIO20
+//   D8  → GPIO8 (SCK)             D9  → GPIO9
+//   D10 → GPIO10 (MOSI)
+#define LCD_PIN_SCLK   8   // D8
+#define LCD_PIN_MOSI  10   // D10
+#define LCD_PIN_DC     4   // D2
+#define LCD_PIN_CS     3   // D1
+#define LCD_PIN_RST    2   // D0
+#define LCD_PIN_BL     5   // D3  (set to -1 if BL tied to 3.3 V)
+
+#define LCD_WIDTH    240
+#define LCD_HEIGHT   280
+// ST7789 panels often need a small address-window offset.
+// The Waveshare 1.69" module requires offset_y = 20 in portrait.
+#define LCD_OFFSET_X   0
+#define LCD_OFFSET_Y  20
+
+// BL PWM brightness 0-255 (255 = full brightness)
+#define LCD_BRIGHTNESS  200
+
+// ---- Display font -----------------------------------------------
+// Choose the font family used for all UI labels.
+// The glucose number always uses the built-in 7-segment Font7; the
+// font family below controls every other piece of text.
+//
+// Supported values (see the "Compatible fonts" table in README.md):
+//   FONT_FAMILY_FREE_SANS_BOLD  (default — bold Helvetica-style, best readability)
+//   FONT_FAMILY_FREE_SANS       (lighter variant of the same family)
+//   FONT_FAMILY_FREE_MONO       (fixed-width — good for digital/retro look)
+//   FONT_FAMILY_FREE_SERIF      (traditional serif, similar to Times New Roman)
+//
+// Note: FONT_FAMILY_* identifiers are defined in the sketch, not here.
+// They are available in config.h because the sketch defines them before
+// #include "config.h".
+#define DISPLAY_FONT  FONT_FAMILY_FREE_SANS_BOLD
+
+// ---- Graph mode -------------------------------------------------
+// Set SHOW_GRAPH to 1 to display a glucose history graph below the
+// current reading, or 0 to keep only the large current-value layout.
+//
+// When enabled the sketch fetches the last GRAPH_MINUTES of readings
+// (one entry every 5 min) so a full trend line is visible on screen.
+// The graph shows:
+//   • Coloured scatter dots (red / orange / green) per reading
+//   • Optional shaded zone fills between target lines (GRAPH_ZONE_FILLS)
+//   • Boundary lines at TARGET_LOW and TARGET_HIGH
+//   • Dynamic Y axis: always shows the full target range; expands
+//     automatically if a reading falls outside
+//   • Hour-boundary tick marks with HH:MM labels on the X axis
+//   • The latest reading highlighted with a larger dot + outer ring
+//   • NSOverlay-inspired header: clock + age on the left, large
+//     glucose number + trend arrow on the right
+//
+// GRAPH_MINUTES – time window visible in the graph.
+//   Must be a multiple of 5.  Recommended values: 120, 180, 240.
+//   Larger windows need more heap for the JSON response; 240 is the
+//   practical maximum on the ESP32C3 with WiFi active.
+//
+// GRAPH_ZONE_FILLS – set to 1 (default) to paint faint coloured
+//   backgrounds in the low / target / high zones, or 0 for a clean
+//   black-background graph with only the boundary lines shown.
+// GRAPH_ENTRY_INTERVAL – expected gap between CGM readings in minutes.
+//   Standard CGMs (Dexcom, Libre, Medtronic) record every 5 minutes → use 5.
+//   Some Nightscout configurations or bridge apps log every 1 minute → use 1.
+//   This controls how many entries are fetched: GRAPH_MINUTES / GRAPH_ENTRY_INTERVAL + 4.
+//   Setting it too high means less data fills the graph; too low just fetches
+//   slightly more entries than needed (no visual impact, small extra payload).
+#define GRAPH_ENTRY_INTERVAL 5
+#define SHOW_GRAPH       1
+#define GRAPH_MINUTES    180
+#define GRAPH_ZONE_FILLS 1
+// GRAPH_HGRID_STEP – glucose value interval (mg/dL) for horizontal grid lines.
+// A line + Y-axis label is drawn at every multiple of this value within the
+// visible Y range.  50 is a good default for a 3-hour window.
+#define GRAPH_HGRID_STEP 50
+#define SHOW_LABELS 1       // 1 = show X/Y labels, 0 = hide labels and extend graph area
+#define SHOW_LINE 1         // 1 = draw trend line between dots, 0 = dots only
+
+// ---- Display colours --------------------------------------------
+// All colour constants are 16-bit RGB-565 values.
+// Use the RGB565(r,g,b) macro (defined in the sketch) for custom colours,
+// or any TFT_* constant from LovyanGFX (TFT_BLACK, TFT_WHITE, TFT_RED, …).
+// The defaults match the colour scheme of the Windows NSOverlay application.
+
+// Background
+#define COLOR_BACKGROUND    TFT_BLACK
+
+// Glucose number colour — changes with the reading value
+#define COLOR_GLUCOSE_LOW   RGB565(220,  60,  60)   // red   – reading below TARGET_LOW
+#define COLOR_GLUCOSE_HIGH  RGB565(255, 150,   0)   // orange – reading above TARGET_HIGH
+#define COLOR_GLUCOSE_OK    RGB565( 60, 210,  80)   // green  – reading in target range
+
+// Clock
+#define COLOR_CLOCK         TFT_WHITE
+
+// Age-of-reading label ("X min atras")
+#define COLOR_AGE_NORMAL    RGB565(210, 210, 210)   // light grey when fresh
+#define COLOR_AGE_STALE     TFT_YELLOW               // turns yellow when reading ≥ 15 min old
+
+// Stale-data warning banner ("! DADO ANTIGO !")
+#define COLOR_STALE_WARN    TFT_YELLOW
+
+// Error / loading message
+#define COLOR_ERROR         TFT_RED
+
+// Status bar (bottom corners: "WiFi OK / ERR" and "NS: OK / ERR")
+#define COLOR_STATUS_OK     TFT_GREEN
+#define COLOR_STATUS_ERR    TFT_RED
+
+// Graph colours (only relevant when SHOW_GRAPH = 1)
+#define COLOR_GRAPH_TARGET_FILL  RGB565(  0,  40,   0)   // dark green fill between target lines
+#define COLOR_GRAPH_TARGET_LINE  RGB565(  0, 130,   0)   // brighter green boundary lines (unused — see HIGH/LOW below)
+#define COLOR_GRAPH_HIGH_LINE    RGB565(255, 190,  40)   // bright orange – high target boundary line
+#define COLOR_GRAPH_LOW_LINE     RGB565(255,  90,  90)   // bright red    – low  target boundary line
+#define COLOR_GRAPH_LOW_FILL     RGB565( 50,   0,   0)   // dark red fill below TARGET_LOW
+#define COLOR_GRAPH_HIGH_FILL    RGB565( 50,  25,   0)   // dark orange fill above TARGET_HIGH
+#define COLOR_GRAPH_10MIN_LINE   RGB565( 30,  30,  30)   // very dim grey – 10-minute vertical grid lines
+#define COLOR_GRAPH_HGRID_LINE   RGB565( 35,  35,  35)   // very dim grey – horizontal glucose grid lines
+#define COLOR_GRAPH_AXIS         RGB565( 90,  90,  90)   // axis lines / tick marks
+#define COLOR_GRAPH_AXIS_LABEL   RGB565(120, 120, 120)   // X / Y axis text
+#define COLOR_GRAPH_BORDER       RGB565( 50,  50,  50)   // graph area border
+
+// Hour marks on X axis:
+// 0 = short tick at the bottom (default)
+// 1 = full-height vertical line at each hour mark
+#define GRAPH_HOUR_LINES_FULL_HEIGHT 0
+#define COLOR_GRAPH_HOUR_LINE   RGB565( 70,  70,  70)   // used when GRAPH_HOUR_LINES_FULL_HEIGHT = 1
+
+// Dashed-lane pattern (pixels): bigger GAP means more space between dashes.
+#define GRAPH_10MIN_DASH_LEN 2
+#define GRAPH_10MIN_GAP_LEN  7
+#define GRAPH_HOUR_DASH_LEN  4
+#define GRAPH_HOUR_GAP_LEN   8
+
+// Dashed style for target boundary lines (high/low glucose).
+#define GRAPH_TARGET_DASH_LEN 6
+#define GRAPH_TARGET_GAP_LEN  8
+
+// Splash screen
+#define COLOR_SPLASH_TITLE  TFT_WHITE
+#define COLOR_SPLASH_ACCENT RGB565(100, 210, 230)   // cyan — subtitle / boot status
+#define COLOR_SPLASH_DIM    RGB565(150, 150, 150)   // grey  — secondary message
