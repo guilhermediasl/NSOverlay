@@ -802,12 +802,10 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
         const int64_t tenMinMs = 600000LL;
         int64_t firstTenMin = (nowMs / tenMinMs) * tenMinMs;
 
-#if SHOW_X_LABELS
         g.setFont(&lgfx::fonts::Font0);
         g.setTextSize(1);
         g.setTextColor(COLOR_GRAPH_AXIS_LABEL);
         g.setTextDatum(lgfx::top_center);
-#endif
 
         int lastLabelX = GRAPH_RIGHT + 1000;
         const int minLabelSpacingPx = 28;
@@ -831,17 +829,7 @@ static void renderGraphMode(lgfx::LGFXBase& g, int W, int H) {
                     g.drawString(tbuf, x, GRAPH_BOTTOM + 2);
                     lastLabelX = x;
                 }
-#endif
             }
-        }
-
-        // ── Graph: current-time vertical line ──────────────────────
-        // Drawn after the 10-min grid so it appears on top.
-        // The right-padding shifts all dots to the left of this line,
-        // making the staleness gap since the newest reading obvious.
-        int nowX = msToX(nowMs);
-        if (nowX > GRAPH_LEFT && nowX <= GRAPH_RIGHT) {
-            g.drawFastVLine(nowX, GRAPH_TOP, GRAPH_H, COLOR_GRAPH_CURRENT_TIME);
         }
     }
 
