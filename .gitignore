@@ -82,6 +82,7 @@ nsoverlay.log.*
 
 # Personal configuration (contains API secrets)
 config.json
+llu_config.json
 
 # Screenshot capture helper (developer utility, not part of the app)
 capture_screenshots.py

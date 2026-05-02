@@ -303,6 +303,135 @@ The shortcut launches `pythonw.exe` (no console window) and carries the correct 
 
 This software is for informational purposes only and is **not** a substitute for professional medical advice. Always consult your healthcare provider before making diabetes management decisions.
 
+---
+
+## LibreLink Up Glucose Display
+
+In addition to the Nightscout-based overlay, this repo includes a standalone Python application that retrieves glucose data **directly from the LibreLink Up API** and displays it as an interactive graph.
+
+### Features
+
+- Authenticates with LibreLink Up (email + password) — no Nightscout required
+- Fetches `X` glucose entries from the `/llu/connections/{patientId}/graph` endpoint
+- Renders a desktop graph with colour-coded zones and trend arrows
+- Configurable **time window** (1, 2, or 3 hours)
+- Auto-refreshes every 60 seconds (configurable)
+- First-run setup wizard; settings accessible via right-click menu
+
+### Quick start
+
+```bash
+# 1. Install dependencies (already in requirements.txt)
+pip install PyQt6 pyqtgraph requests
+
+# 2. Copy and edit the config template
+cp llu_config.json.example llu_config.json
+# → fill in your email, password, and region
+
+# 3. Run
+python llu_glucose_display.py
+```
+
+If `llu_config.json` does not exist (or has no credentials), a setup wizard appears on first run.
+
+### Configuration — `llu_config.json`
+
+Copy `llu_config.json.example` to `llu_config.json` (this file is gitignored) and edit it:
+
+```json
+{
+    "email":             "you@example.com",
+    "password":          "your_password",
+    "region":            "eu",
+    "patient_index":     0,
+    "patient_id":        "",
+    "entries_to_fetch":  36,
+    "time_window_hours": 3,
+    "target_low":        70,
+    "target_high":       180,
+    "refresh_interval_ms": 60000,
+    "widget_width":      520,
+    "widget_height":     320
+}
+```
+
+| Setting | Description | Default |
+|---|---|---|
+| `email` | LibreLink Up / LibreView account e-mail | **required** |
+| `password` | Account password | **required** |
+| `region` | Region code — see table below | `"eu"` |
+| `patient_index` | Zero-based index into the connections list (when multiple patients are linked) | `0` |
+| `patient_id` | Explicit patient UUID — takes priority over `patient_index` if provided | `""` |
+| `entries_to_fetch` | Maximum number of glucose entries to show (`X`) | `36` |
+| `time_window_hours` | Only show entries within the last N hours (1, 2, or 3) | `3` |
+| `target_low` / `target_high` | Glucose target range in mg/dL | `70` / `180` |
+| `refresh_interval_ms` | Auto-refresh interval in milliseconds | `60000` |
+| `widget_width` / `widget_height` | Initial window size in pixels | `520` / `320` |
+
+#### Region codes
+
+| Code | Server |
+|---|---|
+| `ae` | api-ae.libreview.io |
+| `ap` | api-ap.libreview.io |
+| `au` | api-au.libreview.io |
+| `ca` | api-ca.libreview.io |
+| `cn` | api-cn.myfreestyle.cn |
+| `de` | api-de.libreview.io |
+| `eu` | api-eu.libreview.io |
+| `eu2` | api-eu2.libreview.io |
+| `fr` | api-fr.libreview.io |
+| `jp` | api-jp.libreview.io |
+| `la` | api-la.libreview.io |
+| `ru` | api.libreview.ru |
+| `us` | api-us.libreview.io |
+
+If you log in and receive a *"redirected to region X"* error, update the `region` field to match.
+
+### Filtering logic
+
+1. The client calls `GET /llu/connections/{patientId}/graph`, which returns a `graphData` array (historical readings) and `connection.glucoseMeasurement` (the live reading).
+2. Both sources are merged; duplicate `FactoryTimestamp` values are deduplicated.
+3. Only entries whose `FactoryTimestamp` (UTC) falls within the last `time_window_hours` hours are kept.
+4. The remaining entries are sorted ascending and the most-recent `entries_to_fetch` are selected.
+
+**So: the graph shows at most X entries, never older than the selected time window — whichever constraint is more restrictive wins.**
+
+### Error handling
+
+| Situation | Behaviour |
+|---|---|
+| Wrong credentials | `LibreLinkUpAuthError` → error label in the widget |
+| Wrong region (redirect) | `LibreLinkUpAuthError` with region hint |
+| Invalid region code | `LibreLinkUpRegionError` raised at startup |
+| Empty data / no connections | Warning in the status label |
+| Network / timeout | `requests.RequestException` → error label |
+| Expired token | Automatic re-login on the next fetch cycle |
+
+### Running the tests
+
+```bash
+python -m pytest tests/test_llu_client.py -v
+```
+
+The tests use `unittest.mock` and require no real credentials or network access.
+
+### File structure (LibreLink Up additions)
+
+```
+nsoverlay/
+├── llu_glucose_display.py        # Standalone LibreLink Up display app
+├── llu_config.json.example       # Config template (copy to llu_config.json)
+├── llu_config.json               # Your config (gitignored)
+├── src/
+│   └── data/
+│       └── llu_client.py         # LibreLink Up API client
+└── tests/
+    └── test_llu_client.py        # Unit tests for the LLU client
+```
+
+---
+
 ## License
 
 MIT
