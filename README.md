@@ -376,10 +376,14 @@ Copy `llu_config.json.example` to `llu_config.json` (this file is gitignored) an
 | `ap` | api-ap.libreview.io |
 | `au` | api-au.libreview.io |
 | `ca` | api-ca.libreview.io |
+| `cn` | api-cn.myfreestyle.cn |
 | `de` | api-de.libreview.io |
 | `eu` | api-eu.libreview.io |
+| `eu2` | api-eu2.libreview.io |
 | `fr` | api-fr.libreview.io |
 | `jp` | api-jp.libreview.io |
+| `la` | api-la.libreview.io |
+| `ru` | api.libreview.ru |
 | `us` | api-us.libreview.io |
 
 If you log in and receive a *"redirected to region X"* error, update the `region` field to match.

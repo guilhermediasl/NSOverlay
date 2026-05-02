@@ -12,16 +12,20 @@ Authentication and data-retrieval flow
 Region → base URL mapping
 --------------------------
 Each LibreView region uses its own subdomain.  Pass the short region code
-(e.g. ``"eu"``, ``"us"``) and the client resolves the correct base URL.
+(e.g. ``"eu"``, ``"la"``) and the client resolves the correct base URL.
 
     ae  → api-ae.libreview.io
     ap  → api-ap.libreview.io
     au  → api-au.libreview.io
     ca  → api-ca.libreview.io
+    cn  → api-cn.myfreestyle.cn
     de  → api-de.libreview.io
     eu  → api-eu.libreview.io
+    eu2 → api-eu2.libreview.io
     fr  → api-fr.libreview.io
     jp  → api-jp.libreview.io
+    la  → api-la.libreview.io
+    ru  → api.libreview.ru
     us  → api-us.libreview.io
 
 Data shape (from the LibreLink Up / nightscout-librelink-up reference)
@@ -66,10 +70,14 @@ REGION_URLS: dict[str, str] = {
     "ap": "api-ap.libreview.io",
     "au": "api-au.libreview.io",
     "ca": "api-ca.libreview.io",
+    "cn": "api-cn.myfreestyle.cn",
     "de": "api-de.libreview.io",
     "eu": "api-eu.libreview.io",
+    "eu2": "api-eu2.libreview.io",
     "fr": "api-fr.libreview.io",
     "jp": "api-jp.libreview.io",
+    "la": "api-la.libreview.io",
+    "ru": "api.libreview.ru",
     "us": "api-us.libreview.io",
 }
 
