@@ -298,12 +298,16 @@ class _FetchThread(QThread):
             )
         except LibreLinkUpAuthError:
             log.info("llu_display: token expired, re-authenticating …")
-            self._client = None
+            self.reset_client()
             self._ensure_client()
             return self._client.fetch_glucose_entries(  # type: ignore[union-attr]
                 entries_to_fetch=int(self._cfg.get("entries_to_fetch", 36)),
                 time_window_hours=int(self._cfg.get("time_window_hours", 3)),
             )
+
+    def reset_client(self) -> None:
+        """Discard the current authenticated client, forcing a fresh login on next fetch."""
+        self._client = None
 
 
 # ===========================================================================
@@ -545,7 +549,7 @@ class LluGlucoseWidget(QWidget):
             self._lbl_info.setText(self._info_text())
             # Force a fresh login on next fetch
             if self._fetch_thread:
-                self._fetch_thread._client = None  # noqa: SLF001
+                self._fetch_thread.reset_client()
             self._timer.setInterval(int(self._cfg.get("refresh_interval_ms", 60_000)))
             self._start_fetch()
 

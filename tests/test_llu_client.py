@@ -201,9 +201,15 @@ class TestFetchGlucoseEntries(unittest.TestCase):
                 entries_to_fetch=100, time_window_hours=1
             )
 
-        # Entries from 55 min ago and newer should be included
-        self.assertTrue(all(e["_ts"] >= (datetime.now(tz=timezone.utc) - timedelta(hours=1)).timestamp() - 5
-                            for e in result))
+        # Entries from 55 min ago and newer should be included.
+        # _TIME_WINDOW_TOLERANCE_SECONDS accounts for the small delta between the
+        # timestamp stored in the entry and the cutoff computed during the test.
+        _TIME_WINDOW_TOLERANCE_SECONDS = 5
+        self.assertTrue(all(
+            e["_ts"] >= (datetime.now(tz=timezone.utc) - timedelta(hours=1)).timestamp()
+            - _TIME_WINDOW_TOLERANCE_SECONDS
+            for e in result
+        ))
         self.assertLessEqual(len(result), 5)
 
     def test_entries_capped_by_x(self):

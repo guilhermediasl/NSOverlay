@@ -278,7 +278,7 @@ class LibreLinkUpClient:
             pid = self._resolve_patient_id()
 
         url = f"{self._base_url}/llu/connections/{pid}/graph"
-        log.debug("llu_client: GET %s", url)
+        log.debug("llu_client: GET /llu/connections/<patientId>/graph")
         resp = self._session.get(
             url, headers=self._auth_headers(), timeout=self._timeout
         )
@@ -417,5 +417,5 @@ class LibreLinkUpClient:
             raise LibreLinkUpError(
                 f"Connection at index {index} has no patientId field."
             )
-        log.debug("llu_client: using patientId %s (index %d)", pid, index)
+        log.debug("llu_client: using patientId at index %d", index)
         return pid
