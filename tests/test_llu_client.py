@@ -93,6 +93,7 @@ class TestRegionValidation(unittest.TestCase):
     def test_region_is_case_insensitive(self):
         client = LibreLinkUpClient("a@b.com", "pw", region="EU")
         self.assertIsNotNone(client)
+        self.assertIn("api-eu.libreview.io", client._base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +203,12 @@ class TestFetchGlucoseEntries(unittest.TestCase):
             )
 
         # Entries from 55 min ago and newer should be included.
-        # _TIME_WINDOW_TOLERANCE_SECONDS accounts for the small delta between the
+        # time_window_tolerance_seconds accounts for the small delta between the
         # timestamp stored in the entry and the cutoff computed during the test.
-        _TIME_WINDOW_TOLERANCE_SECONDS = 5
+        time_window_tolerance_seconds = 5
         self.assertTrue(all(
             e["_ts"] >= (datetime.now(tz=timezone.utc) - timedelta(hours=1)).timestamp()
-            - _TIME_WINDOW_TOLERANCE_SECONDS
+            - time_window_tolerance_seconds
             for e in result
         ))
         self.assertLessEqual(len(result), 5)

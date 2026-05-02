@@ -56,6 +56,7 @@ import os
 import sys
 from typing import Any
 
+import requests
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
@@ -272,8 +273,12 @@ class _FetchThread(QThread):
             self.fetch_error.emit(f"Authentication error: {exc}")
         except LibreLinkUpError as exc:
             self.fetch_error.emit(f"API error: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            self.fetch_error.emit(f"Network/unexpected error: {exc}")
+        except requests.Timeout as exc:
+            self.fetch_error.emit(f"Request timed out: {exc}")
+        except requests.ConnectionError as exc:
+            self.fetch_error.emit(f"Connection error: {exc}")
+        except requests.RequestException as exc:
+            self.fetch_error.emit(f"Network error: {exc}")
 
     # ── internals ────────────────────────────────────────────────────────────
 

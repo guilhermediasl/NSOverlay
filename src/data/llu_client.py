@@ -347,10 +347,10 @@ class LibreLinkUpClient:
             if dt is None:
                 continue
             ts = dt.timestamp()
-            entry = dict(entry)   # shallow copy so callers get clean dicts
-            entry["_ts"] = ts
+            entry_copy = dict(entry)   # shallow copy so callers get clean dicts
+            entry_copy["_ts"] = ts
             if ts >= cutoff:
-                parsed.append(entry)
+                parsed.append(entry_copy)
 
         # Sort ascending, then take the most-recent X
         parsed.sort(key=lambda e: e["_ts"])
