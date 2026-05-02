@@ -1,0 +1,24 @@
+{
+    "_comment": "Copy this file to llu_config.json and fill in your credentials.",
+
+    "email":             "you@example.com",
+    "password":          "your_password_here",
+
+    "region":            "eu",
+
+    "patient_index":     0,
+
+    "patient_id":        "",
+
+    "entries_to_fetch":  36,
+
+    "time_window_hours": 3,
+
+    "target_low":        70,
+    "target_high":       180,
+
+    "refresh_interval_ms": 60000,
+
+    "widget_width":  520,
+    "widget_height": 320
+}
